@@ -38,7 +38,7 @@ include_directories(${CMAKE_SOURCE_DIR}/${INCL_DIR}
 
 add_library (ovs_sai_plugin SHARED ${SOURCES})
 
-target_link_libraries (ovs_sai_plugin openvswitch sai config-yaml)
+target_link_libraries (ovs_sai_plugin ${OVSCOMMON_LIBRARIES} sai config-yaml)
 
 ###
 ### Installation

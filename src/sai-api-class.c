@@ -22,7 +22,11 @@ VLOG_DEFINE_THIS_MODULE(sai_api_class);
 
 static struct ops_sai_api_class sai_api;
 static sai_object_id_t sai_lable_id_to_oid_map[SAI_PORTS_MAX];
+
+/*add by jay*/
+#if 0
 static char sai_api_mac_str[MAC_STR_LEN + 1];
+#endif
 
 static const char *__profile_get_value(sai_switch_profile_id_t, const char *);
 static int __profile_get_next_value(sai_switch_profile_id_t, const char **,
@@ -45,8 +49,10 @@ void
 ops_sai_api_init(void)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
+/*add by jay*/
+#if 0
     sai_mac_t mac = { };
-
+#endif
     static const service_method_table_t sai_services = {
         __profile_get_value,
         __profile_get_next_value,
@@ -66,18 +72,20 @@ ops_sai_api_init(void)
         status = SAI_STATUS_FAILURE;
         SAI_ERROR_LOG_EXIT(status, "SAI api already initialized");
     }
-
+/*add by jay*/
+#if 0
     status = ops_sai_vendor_base_mac_get(mac);
     SAI_ERROR_LOG_EXIT(status, "Failed to get base MAC address");
     sprintf(sai_api_mac_str, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
+#endif
     status = sai_api_initialize(0, &sai_services);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI api");
 
     status = sai_api_query(SAI_API_SWITCH, (void **) &sai_api.switch_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI switch api");
 
+#if 0
     status = sai_api_query(SAI_API_PORT, (void **) &sai_api.port_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI port api");
 
@@ -87,8 +95,8 @@ ops_sai_api_init(void)
     status = sai_api_query(SAI_API_HOST_INTERFACE,
                            (void **) &sai_api.host_interface_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI host interface api");
-
-    status = sai_api.switch_api->initialize_switch(1, "SX", "/", &sai_events);
+#endif
+    status = sai_api.switch_api->initialize_switch(1, "SX", "/etc/spec/e582.txt", &sai_events);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize switch");
 
     status = __init_ports();
@@ -144,6 +152,8 @@ ops_sai_api_hw_id2port_id(uint32_t hw_id)
 /*
  * Return value requested by SAI using string key.
  */
+#define SAI_KEY_INIT_CONFIG_FILE "SAI_KEY_INIT_CONFIG_FILE"
+#define SAI_KEY_INIT_CONFIG_FILE_PATH "/etc/spec/e582.txt"
 static const char *
 __profile_get_value(sai_switch_profile_id_t profile_id, const char *variable)
 {
@@ -154,7 +164,7 @@ __profile_get_value(sai_switch_profile_id_t profile_id, const char *variable)
     if (!strcmp(variable, SAI_KEY_INIT_CONFIG_FILE)) {
         return SAI_INIT_CONFIG_FILE_PATH;
     } else if (!strcmp(variable, "DEVICE_MAC_ADDRESS")) {
-        return sai_api_mac_str;
+        return "20:03:04:05:06:00";
     } else if (!strcmp(variable, "INITIAL_FAN_SPEED")) {
         return "50";
     }
