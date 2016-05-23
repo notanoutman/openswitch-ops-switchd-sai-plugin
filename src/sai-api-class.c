@@ -96,11 +96,14 @@ ops_sai_api_init(void)
                            (void **) &sai_api.host_interface_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI host interface api");
 #endif
-    status = sai_api.switch_api->initialize_switch(1, "SX", "/etc/spec/e582.txt", &sai_events);
+    status = sai_api.switch_api->initialize_switch(0, "SX", "/etc/spec/e582.txt", &sai_events);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize switch");
-
-    status = __init_ports();
+    /*add by chenyq for disable gport get, use hardcode to get it*/
+    //status = __init_ports();
     SAI_ERROR_LOG_EXIT(status, "Failed to create interfaces");
+    status = sai_api_query(SAI_API_PORT, (void**)&sai_api.port_api);
+    status = sai_api_query(SAI_API_VLAN, (void**)&sai_api.vlan_api);
+    status = sai_api_query(SAI_API_HOST_INTERFACE, (void**)&sai_api.host_interface_api);
 
     sai_api.initialized = true;
 
@@ -146,7 +149,9 @@ ops_sai_api_get_instance(void)
 sai_object_id_t
 ops_sai_api_hw_id2port_id(uint32_t hw_id)
 {
-    return sai_lable_id_to_oid_map[hw_id];
+    //return sai_lable_id_to_oid_map[hw_id];
+    /*add by chenyq, currenty use this to get gport*/
+    return (((sai_object_id_t)(1)<<32 )| (sai_object_id_t)hw_id);
 }
 
 /*
@@ -275,7 +280,9 @@ __get_port_lable_id(sai_object_id_t oid, uint32_t *label_id)
         goto exit;
     }
 
-    *label_id = (hw_lanes[0] / attr.value.u32list.count) + 1;
+   // *label_id = (hw_lanes[0] / attr.value.u32list.count) + 1;
+   *label_id = 0;
+   /*add by chenyq for not crush*/
     VLOG_DBG("Port label id: %u", *label_id);
 
 exit:

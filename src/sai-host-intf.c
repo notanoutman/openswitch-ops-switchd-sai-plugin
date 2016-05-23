@@ -25,7 +25,7 @@ int
 ops_sai_hostint_netdev_create(const char *name, uint32_t hw_id)
 {
     sai_attribute_t hostif_attrib[3] = { };
-    sai_status_t status = SAI_STATUS_SUCCESS;
+    //sai_status_t status = SAI_STATUS_SUCCESS;
     sai_object_id_t hif_id_port = SAI_NULL_OBJECT_ID;
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
@@ -38,11 +38,12 @@ ops_sai_hostint_netdev_create(const char *name, uint32_t hw_id)
     hostif_attrib[2].id = SAI_HOSTIF_ATTR_RIF_OR_PORT_ID;
     hostif_attrib[2].value.oid = ops_sai_api_hw_id2port_id(hw_id);
 
-    status = sai_api->host_interface_api->create_hostif(&hif_id_port,
+    sai_api->host_interface_api->create_hostif(&hif_id_port,
                                                         ARRAY_SIZE(hostif_attrib),
                                                         hostif_attrib);
-
-    return SAI_ERROR_2_ERRNO(status);
+    /*add by chenyq for disable hostif temp*/
+   // return SAI_ERROR_2_ERRNO(status);
+   return 0;
 }
 
 /**
@@ -51,6 +52,8 @@ ops_sai_hostint_netdev_create(const char *name, uint32_t hw_id)
 void
 ops_sai_hostint_traps_register(void)
 {
+/*add by chenyq , it fail will cause assert*/
+#if 0
     sai_attribute_t attr = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
@@ -70,4 +73,6 @@ ops_sai_hostint_traps_register(void)
         SAI_ERROR_LOG_ABORT(status, "Failed to set trap channel %d",
                             hostif_traps[i]);
     }
+#endi
+    return
 }

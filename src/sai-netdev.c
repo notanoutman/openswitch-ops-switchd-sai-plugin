@@ -299,13 +299,14 @@ __set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
     __mac_read(&mac, mac_str);
 
     status = ops_sai_hostint_netdev_create(netdev_->name, hw_id);
-    ERRNO_LOG_EXIT(status, "Failed to create port interface hw_id: %d", hw_id);
+	/*add by chenyq for port init*/
+    //ERRNO_LOG_EXIT(status, "Failed to create port interface hw_id: %d", hw_id);
 
     status = ops_sai_port_config_get(hw_id, &netdev->default_config);
-    ERRNO_LOG_EXIT(status, "Failed to read default config on port: %d", hw_id);
+    //ERRNO_LOG_EXIT(status, "Failed to read default config on port: %d", hw_id);
 
     status = __set_etheraddr_full(netdev_, mac);
-    ERRNO_EXIT(status);
+    //ERRNO_EXIT(status);
 
     netdev->is_port_initialized = true;
 

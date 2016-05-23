@@ -102,7 +102,8 @@ ops_sai_port_config_set(uint32_t hw_id, const struct ops_sai_port_config *new,
     NULL_PARAM_LOG_ABORT(new);
 
     status = __set_hw_intf_config_full(hw_id, new, old);
-    SAI_ERROR_EXIT(status);
+    /*add by chenyq for temp disable it*/
+    //SAI_ERROR_EXIT(status);
 
     if (old->hw_enable != new->hw_enable) {
         attr.id = SAI_PORT_ATTR_ADMIN_STATE;
