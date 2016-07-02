@@ -1,5 +1,5 @@
 /*
- * Copyright Mellanox Technologies, Ltd. 2001-2016.  
+ * Copyright Mellanox Technologies, Ltd. 2001-2016.
  * This software product is licensed under Apache version 2, as detailed in
  * the COPYING file.
  */
@@ -11,22 +11,17 @@
 #include <sai-netdev.h>
 #include <util.h>
 #include <sai-vendor.h>
+#include <sai-common.h>
 
-#ifndef SAI_INIT_CONFIG_FILE_PATH
-#define SAI_INIT_CONFIG_FILE_PATH ""
-#endif
-
-#define MAC_STR_LEN 17
 
 VLOG_DEFINE_THIS_MODULE(sai_api_class);
 
+static sai_fdb_event_notification_fn sai_fdb_event_callback = NULL;
+
 static struct ops_sai_api_class sai_api;
 static sai_object_id_t sai_lable_id_to_oid_map[SAI_PORTS_MAX];
-
-/*add by jay*/
-#if 0
+static struct eth_addr sai_api_mac;
 static char sai_api_mac_str[MAC_STR_LEN + 1];
-#endif
 
 static const char *__profile_get_value(sai_switch_profile_id_t, const char *);
 static int __profile_get_next_value(sai_switch_profile_id_t, const char **,
@@ -49,14 +44,13 @@ void
 ops_sai_api_init(void)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
-/*add by jay*/
-#if 0
-    sai_mac_t mac = { };
-#endif
+
     static const service_method_table_t sai_services = {
         __profile_get_value,
         __profile_get_next_value,
     };
+
+
     static sai_switch_notification_t sai_events = {
         __event_switch_state_changed,
         __event_fdb,
@@ -72,20 +66,24 @@ ops_sai_api_init(void)
         status = SAI_STATUS_FAILURE;
         SAI_ERROR_LOG_EXIT(status, "SAI api already initialized");
     }
-/*add by jay*/
-#if 0
-    status = ops_sai_vendor_base_mac_get(mac);
+
+    status = ops_sai_vendor_base_mac_get(sai_api_mac.ea);
     SAI_ERROR_LOG_EXIT(status, "Failed to get base MAC address");
     sprintf(sai_api_mac_str, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-#endif
+            sai_api_mac.ea[0], sai_api_mac.ea[1],
+            sai_api_mac.ea[2], sai_api_mac.ea[3],
+            sai_api_mac.ea[4], sai_api_mac.ea[5]);
+
     status = sai_api_initialize(0, &sai_services);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI api");
 
     status = sai_api_query(SAI_API_SWITCH, (void **) &sai_api.switch_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI switch api");
 
-#if 0
+
+    status = sai_api.switch_api->initialize_switch(0, "SX", "/etc/spec/e582.txt", &sai_events);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize switch");
+
     status = sai_api_query(SAI_API_PORT, (void **) &sai_api.port_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI port api");
 
@@ -95,15 +93,25 @@ ops_sai_api_init(void)
     status = sai_api_query(SAI_API_HOST_INTERFACE,
                            (void **) &sai_api.host_interface_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI host interface api");
-#endif
-    status = sai_api.switch_api->initialize_switch(0, "SX", "/etc/spec/e582.txt", &sai_events);
-    SAI_ERROR_LOG_EXIT(status, "Failed to initialize switch");
-    /*add by chenyq for disable gport get, use hardcode to get it*/
-    //status = __init_ports();
+
+    status = sai_api_query(SAI_API_POLICER,
+                           (void **) &sai_api.policer_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI policer api");
+
+    status = sai_api_query(SAI_API_HASH,
+                           (void **) &sai_api.hash_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI hash api");
+
+    status = sai_api_query(SAI_API_STP,
+                           (void **) &sai_api.stp_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize Stp api");
+
+    status = sai_api_query(SAI_API_LAG,
+                           (void **) &sai_api.lag_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize LAG api");
+
+//    status = __init_ports();
     SAI_ERROR_LOG_EXIT(status, "Failed to create interfaces");
-    status = sai_api_query(SAI_API_PORT, (void**)&sai_api.port_api);
-    status = sai_api_query(SAI_API_VLAN, (void**)&sai_api.vlan_api);
-    status = sai_api_query(SAI_API_HOST_INTERFACE, (void**)&sai_api.host_interface_api);
 
     sai_api.initialized = true;
 
@@ -154,6 +162,20 @@ ops_sai_api_hw_id2port_id(uint32_t hw_id)
     return (((sai_object_id_t)(1)<<32 )| (sai_object_id_t)hw_id);
 }
 
+/**
+ * Read device base MAC address.
+ * @param[out] mac pointer to MAC buffer.
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+int
+ops_sai_api_base_mac_get(struct eth_addr *mac)
+{
+    memcpy(mac, &sai_api_mac, sizeof(*mac));
+
+    return 0;
+}
+
 /*
  * Return value requested by SAI using string key.
  */
@@ -169,7 +191,7 @@ __profile_get_value(sai_switch_profile_id_t profile_id, const char *variable)
     if (!strcmp(variable, SAI_KEY_INIT_CONFIG_FILE)) {
         return SAI_INIT_CONFIG_FILE_PATH;
     } else if (!strcmp(variable, "DEVICE_MAC_ADDRESS")) {
-        return "20:03:04:05:06:00";
+        return sai_api_mac_str;
     } else if (!strcmp(variable, "INITIAL_FAN_SPEED")) {
         return "50";
     }
@@ -205,6 +227,9 @@ static void
 __event_fdb(uint32_t count, sai_fdb_event_notification_data_t * data)
 {
     SAI_API_TRACE_FN();
+
+    if(sai_fdb_event_callback)
+        sai_fdb_event_callback(count,data);
 }
 
 /*
@@ -326,4 +351,12 @@ __init_ports(void)
 
 exit:
     return status;
+}
+
+
+
+void
+ops_sai_fdb_event_register(sai_fdb_event_notification_fn fn_cb)
+{
+    sai_fdb_event_callback = fn_cb;
 }

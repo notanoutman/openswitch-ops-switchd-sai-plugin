@@ -1,5 +1,5 @@
 /*
- * Copyright Mellanox Technologies, Ltd. 2001-2016.  
+ * Copyright Mellanox Technologies, Ltd. 2001-2016.
  * This software product is licensed under Apache version 2, as detailed in
  * the COPYING file.
  */
@@ -12,17 +12,29 @@
 #define SAI_PORTS_MAX (64)
 #define SAI_MAX_LANES (4)
 
+#define SAI_INIT_CONFIG_FILE_PATH "not support"
+
+struct eth_addr;
+
 struct ops_sai_api_class {
     sai_switch_api_t *switch_api;
     sai_port_api_t *port_api;
     sai_vlan_api_t *vlan_api;
     sai_hostif_api_t *host_interface_api;
-    bool initialized;
+    sai_policer_api_t *policer_api;
+    sai_hash_api_t *hash_api;
+    sai_stp_api_t *stp_api;
+    sai_lag_api_t *lag_api;
+    int32_t initialized;
 };
 
 void ops_sai_api_init(void);
 int ops_sai_api_uninit(void);
 const struct ops_sai_api_class *ops_sai_api_get_instance(void);
 sai_object_id_t ops_sai_api_hw_id2port_id(uint32_t);
+int ops_sai_api_base_mac_get(struct eth_addr *);
+
+void
+ops_sai_fdb_event_register(sai_fdb_event_notification_fn fn_cb);
 
 #endif /* sai-api-class.h */

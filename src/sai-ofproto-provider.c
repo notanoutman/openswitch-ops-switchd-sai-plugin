@@ -1,14 +1,18 @@
 /*
- * Copyright Mellanox Technologies, Ltd. 2001-2016.  
+ * Copyright Mellanox Technologies, Ltd. 2001-2016.
  * This software product is licensed under Apache version 2, as detailed in
  * the COPYING file.
  */
-
+/* by xuwj */
+#define __BOOL_DEFINED
+/* end */
 #include <errno.h>
 
 #include <seq.h>
 #include <coverage.h>
+#include <hmap.h>
 #include <vlan-bitmap.h>
+#include <socket-util.h>
 #include <ofproto/ofproto-provider.h>
 #include <ofproto/bond.h>
 #include <ofproto/tunnel.h>
@@ -22,7 +26,18 @@
 #include <sai-log.h>
 #include <sai-port.h>
 #include <sai-vlan.h>
+#include <sai-router.h>
 #include <sai-host-intf.h>
+#include <sai-router-intf.h>
+#include <sai-route.h>
+#include <sai-neighbor.h>
+#include <sai-hash.h>
+#include <sai-mac-learning.h>
+#include <sai-stg.h>
+#include <sai-lag.h>
+#include "asic-plugin.h"
+
+#include "bridge.h"
 
 #define SAI_INTERFACE_TYPE_SYSTEM "system"
 #define SAI_INTERFACE_TYPE_VRF "vrf"
@@ -34,15 +49,18 @@ struct ofproto_sai {
     struct ofproto up;
     struct hmap_node all_ofproto_sai_node;      /* In 'all_ofproto_dpifs'. */
     struct hmap bundles;        /* Contains "struct ofbundle"s. */
-    struct ovs_mutex mutex;
     struct sset ports;          /* Set of standard port names. */
     struct sset ghost_ports;    /* Ports with no datapath port. */
+    handle_t vrid;
 };
 
 struct ofport_sai {
     struct ofport up;
     struct ofbundle_sai *bundle;        /* Bundle that contains this port */
     struct ovs_list bundle_node;        /* In struct ofbundle's "ports" list. */
+
+    struct ofbundle_sai *tx_lag_bundle;        /* Bundle that contains this port */
+    struct ovs_list bundle_tx_lag_node;        /* In struct ofbundle's "tx_number_ports" list. */
 };
 
 struct ofbundle_sai {
@@ -57,6 +75,30 @@ struct ofbundle_sai {
     int vlan;                   /* -1=trunk port, else a 12-bit VLAN ID. */
     unsigned long *trunks;      /* Bitmap of trunked VLANs, if 'vlan' == -1.
                                  * NULL if all VLANs are trunked. */
+
+    /* L3 interface */
+    struct {
+        bool created;
+        bool enabled;
+        handle_t handle; /* VLAN or port ID */
+        handle_t rifid;
+        bool is_loopback;
+    } router_intf;
+
+    /* L3 IP addresses */
+    char *ipv4_primary;
+    char *ipv6_primary;
+    struct hmap ipv4_secondary;
+    struct hmap ipv6_secondary;
+
+    /* Local routes entries */
+    struct hmap local_routes;
+    /* Neighbor entries */
+    struct hmap neighbors;
+
+    /* LAG Info */
+    int             bond_hw_handle;
+    struct ovs_list tx_number_ports;        /* Contains "struct ofport"s. */
 };
 
 struct ofproto_sai_group {
@@ -126,12 +168,33 @@ static int __vlan_reconfigure(struct ofbundle_sai *,
 static int __ofbundle_ports_reconfigure(struct ofbundle_sai *,
                                         const struct
                                         ofproto_bundle_settings *);
+static int __ofbundle_router_intf_reconfigure(struct ofbundle_sai *,
+                                                const struct
+                                                ofproto_bundle_settings *);
+static int __ofbundle_router_intf_remove(struct ofbundle_sai *);
+static int __ofbundle_ip_reconfigure(struct ofbundle_sai *,
+                                       const struct ofproto_bundle_settings *);
+static int __ofbundle_ip_remove(struct ofbundle_sai *);
+static int __ofbundle_ip_secondary_reconfigure(struct ofbundle_sai *,
+                                               const struct
+                                               ofproto_bundle_settings *,
+                                               bool);
+static struct ip_address *__ofbundle_ip_secondary_find(struct
+                                                       ofbundle_sai *,
+                                                       const char *);
+static int __ofproto_ip_add(struct ofproto *, const char *, bool);
+static int __ofproto_ip_remove(struct ofproto *, const char *, bool);
+
 static void __ofbundle_rename(struct ofbundle_sai *, const char *);
 static struct ofbundle_sai *__ofbundle_create(struct ofproto_sai *, void *,
                                               const struct
                                               ofproto_bundle_settings *);
 static void __ofbundle_destroy(struct ofbundle_sai *);
 static struct ofbundle_sai *__ofbundle_lookup(struct ofproto_sai *, void *);
+static struct ofbundle_sai *__ofbundle_lookup_by_netdev_name(struct
+                                                               ofproto_sai *,
+                                                               const char *);
+
 static int __bundle_set(struct ofproto *, void *,
                                   const struct ofproto_bundle_settings *);
 static void __bundle_remove(struct ofport *);
@@ -147,6 +210,13 @@ static enum ofperr __group_modify(struct ofgroup *);
 static enum ofperr __group_get_stats(const struct ofgroup *,
                                      struct ofputil_group_stats *);
 static const char *__get_datapath_version(const struct ofproto *);
+static struct neigbor_entry* __neigh_entry_hash_find(const char *,
+                                                     const struct
+                                                     ofbundle_sai *);
+static void __neigh_entry_hash_add(const char *, const char *,
+                                   struct ofbundle_sai *);
+static void __neigh_entry_hash_remove(const char *, struct ofbundle_sai *);
+
 static int __add_l3_host_entry(const struct ofproto *, void *, bool, char *,
                                char *, int *);
 static int __delete_l3_host_entry(const struct ofproto *, void *, bool, char *,
@@ -160,6 +230,8 @@ static int __l3_ecmp_hash_set(const struct ofproto *, unsigned int, bool);
 static int __run(struct ofproto *);
 static void __wait(struct ofproto *);
 static void __set_tables_version(struct ofproto *, cls_version_t);
+static void __ofproto_bundle_settings_dump(const
+                                           struct ofproto_bundle_settings *s);
 
 const struct ofproto_class ofproto_sai_class = {
     PROVIDER_INIT_GENERIC(init,                  __init)
@@ -270,13 +342,53 @@ ofproto_sai_register(void)
     ofproto_class_register(&ofproto_sai_class);
 }
 
+static struct asic_plugin_interface __sai_interface = {
+    .create_stg = &create_stg,
+    .delete_stg = &delete_stg,
+    .add_stg_vlan = &add_stg_vlan,
+    .remove_stg_vlan = &remove_stg_vlan,
+    .set_stg_port_state = &set_stg_port_state,
+    .get_stg_port_state = &get_stg_port_state,
+    .get_stg_default = &get_stg_default,
+    .get_mac_learning_hmap = &sai_mac_learning_get_hmap,
+};
+
+void __sai_register_stg_mac_learning_init()
+{
+    struct plugin_extension_interface sai_extension;
+
+    SAI_API_TRACE_FN();
+
+    sai_extension.plugin_name = ASIC_PLUGIN_INTERFACE_NAME;
+    sai_extension.major = ASIC_PLUGIN_INTERFACE_MAJOR;
+    sai_extension.minor = ASIC_PLUGIN_INTERFACE_MINOR;
+    sai_extension.plugin_interface = (void *)&__sai_interface;
+
+    register_plugin_extension(&sai_extension);
+    VLOG_INFO("The %s asic plugin interface was registered", ASIC_PLUGIN_INTERFACE_NAME);
+}
+
 static void
 __init(const struct shash *iface_hints)
 {
     SAI_API_TRACE_FN();
 
     ops_sai_api_init();
-    ops_sai_hostint_traps_register();
+    ops_sai_port_init();
+    ops_sai_vlan_init();
+    ops_sai_policer_init();
+    ops_sai_router_init();
+    ops_sai_host_intf_init();
+    ops_sai_router_intf_init();
+    ops_sai_neighbor_init();
+    ops_sai_route_init();
+    ops_sai_host_intf_traps_register();
+    ops_sai_ecmp_hash_init();
+
+    sai_mac_learning_init();
+    __sai_register_stg_mac_learning_init();
+
+    ops_stg_init(0);
 }
 
 static void
@@ -284,7 +396,6 @@ __enumerate_types(struct sset *types)
 {
     SAI_API_TRACE_FN();
 
-    /* VRF isn't supported yet, but needed for ops-switchd. */
     sset_add(types, SAI_INTERFACE_TYPE_VRF);
     sset_add(types, SAI_INTERFACE_TYPE_SYSTEM);
 }
@@ -312,6 +423,16 @@ __del(const char *type, const char *name)
 {
     SAI_API_TRACE_FN();
 
+    ops_sai_ecmp_hash_deinit();
+    ops_sai_host_intf_traps_unregister();
+    ops_sai_route_deinit();
+    ops_sai_neighbor_deinit();
+    ops_sai_router_intf_deinit();
+    ops_sai_host_intf_deinit();
+    ops_sai_router_deinit();
+    ops_sai_policer_deinit();
+    ops_sai_vlan_deinit();
+    ops_sai_port_deinit();
     ops_sai_api_uninit();
 
     return 0;
@@ -324,8 +445,9 @@ __port_open_type(const char *datapath_type, const char *port_type)
 
     VLOG_DBG("datapath_type: %s, port_type: %s", datapath_type, port_type);
 
-    if ((strcmp(port_type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) ||
-        (strcmp(port_type, OVSREC_INTERFACE_TYPE_LOOPBACK) == 0)) {
+    if ((STR_EQ(port_type, OVSREC_INTERFACE_TYPE_INTERNAL)) ||
+        (STR_EQ(port_type, OVSREC_INTERFACE_TYPE_VLANSUBINT)) ||
+        (STR_EQ(port_type, OVSREC_INTERFACE_TYPE_LOOPBACK))) {
         return port_type;
     } else {
         return SAI_INTERFACE_TYPE_SYSTEM;
@@ -348,6 +470,7 @@ __alloc(void)
 static inline struct ofproto_sai *
 __ofproto_sai_cast(const struct ofproto *ofproto)
 {
+    ovs_assert(ofproto);
     ovs_assert(ofproto->ofproto_class == &ofproto_sai_class);
     return CONTAINER_OF(ofproto, struct ofproto_sai, up);
 }
@@ -365,17 +488,20 @@ __construct(struct ofproto *ofproto_)
 
     sset_init(&ofproto->ports);
     sset_init(&ofproto->ghost_ports);
-    ovs_mutex_init(&ofproto->mutex);
     /* Currently ACL is not supported. Implementation will be added in a
      * future. */
     ofproto_init_tables(ofproto_, 1);
 
-    ovs_mutex_lock(&ofproto->mutex);
     hmap_init(&ofproto->bundles);
     hmap_insert(&all_ofproto_sai, &ofproto->all_ofproto_sai_node,
                 hash_string(ofproto->up.name, 0));
-    ovs_mutex_unlock(&ofproto->mutex);
 
+    if (STR_EQ(ofproto_->type, SAI_INTERFACE_TYPE_VRF)) {
+        error = ops_sai_router_create(&ofproto->vrid);
+        ERRNO_EXIT(error);
+    }
+
+exit:
     return error;
 }
 
@@ -386,13 +512,14 @@ __destruct(struct ofproto *ofproto_ OVS_UNUSED)
 
     SAI_API_TRACE_FN();
 
+    if (STR_EQ(ofproto_->type, SAI_INTERFACE_TYPE_VRF)) {
+        ops_sai_router_remove(&ofproto->vrid);
+    }
+
     sset_destroy(&ofproto->ghost_ports);
     sset_destroy(&ofproto->ports);
 
-    ovs_mutex_lock(&ofproto->mutex);
     hmap_remove(&all_ofproto_sai, &ofproto->all_ofproto_sai_node);
-    ovs_mutex_unlock(&ofproto->mutex);
-    ovs_mutex_destroy(&ofproto->mutex);
 }
 
 static void
@@ -501,6 +628,10 @@ __port_del(struct ofproto *ofproto_, ofp_port_t ofp_port)
     struct ofport_sai *ofport = __get_ofp_port(ofproto, ofp_port);
 
     SAI_API_TRACE_FN();
+
+    /* check why ofp_port == 65535 ? */
+    if(!ofport)
+        return 0;
 
     sset_find_and_delete(&ofproto->ports,
                         netdev_get_name(ofport->up.netdev));
@@ -690,14 +821,22 @@ __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
     port->bundle = bundle;
     list_push_back(&bundle->ports, &port->bundle_node);
 
-    if (-1 != bundle->vlan) {
-        status = ops_sai_vlan_access_port_add(bundle->vlan, hw_id);
-        ERRNO_LOG_EXIT(status, "Failed to add port to bundle");
+    if (STR_EQ(netdev_get_type(port->up.netdev), OVSREC_INTERFACE_TYPE_SYSTEM)) {
+        if (-1 != bundle->vlan) {
+            status = ops_sai_vlan_access_port_add(bundle->vlan, hw_id);
+            ERRNO_LOG_EXIT(status, "Failed to add port to bundle");
+        }
+
+        if (NULL != bundle->trunks) {
+            status = ops_sai_vlan_trunks_port_add(bundle->trunks, hw_id);
+            ERRNO_LOG_EXIT(status, "Failed to add port to bundle");
+        }
     }
 
-    if (NULL != bundle->trunks) {
-        status = ops_sai_vlan_trunks_port_add(bundle->trunks, hw_id);
-        ERRNO_LOG_EXIT(status, "Failed to add port to bundle");
+    if(-1 != bundle->bond_hw_handle)
+    {
+        status = __ops_sai_lag_attach_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
+        ERRNO_LOG_EXIT(status, "Failed to add lag member port to bundle");
     }
 
 exit:
@@ -721,14 +860,22 @@ __ofbundle_port_del(struct ofport_sai *port)
 
     bundle = port->bundle;
 
-    if (-1 != bundle->vlan) {
-        status = ops_sai_vlan_access_port_del(bundle->vlan, hw_id);
-        ERRNO_LOG_EXIT(status, "Failed to remove port from bundle");
+    if (STR_EQ(netdev_get_type(port->up.netdev), OVSREC_INTERFACE_TYPE_SYSTEM)) {
+        if (-1 != bundle->vlan) {
+            status = ops_sai_vlan_access_port_del(bundle->vlan, hw_id);
+            ERRNO_LOG_EXIT(status, "Failed to remove port from bundle");
+        }
+
+        if (NULL != bundle->trunks) {
+            status = ops_sai_vlan_trunks_port_del(bundle->trunks, hw_id);
+            ERRNO_LOG_EXIT(status, "Failed to remove port from bundle");
+        }
     }
 
-    if (NULL != bundle->trunks) {
-        status = ops_sai_vlan_trunks_port_del(bundle->trunks, hw_id);
-        ERRNO_LOG_EXIT(status, "Failed to remove port from bundle");
+    if(-1 != bundle->bond_hw_handle)
+    {
+        status = __ops_sai_lag_detach_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
+        ERRNO_LOG_EXIT(status, "Failed to remove lag member port to bundle");
     }
 
 exit:
@@ -737,6 +884,126 @@ exit:
 
     return status;
 }
+
+/************************************ lag tx member **************************************/
+
+/*
+ * Add lag tx member port to bundle.
+ */
+static int
+__ofbundle_lag_tx_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
+{
+    int status = 0;
+    //uint32_t hw_id = netdev_sai_hw_id_get(port->up.netdev);
+
+    if (NULL == port) {
+        status = EINVAL;
+        ERRNO_LOG_EXIT(status, "Got NULL port to add");
+    }
+
+    /* Port belongs to other bundle - remove. */
+    if (NULL != port->tx_lag_bundle) {
+        VLOG_WARN("Add lag tx member port to bundle: removing port from old bundle");
+//        __bundle_remove(&port->up);
+    }
+
+    port->tx_lag_bundle = bundle;
+    list_push_back(&bundle->tx_number_ports, &port->bundle_tx_lag_node);
+
+    if (STR_EQ(netdev_get_type(port->up.netdev), OVSREC_INTERFACE_TYPE_SYSTEM)) {
+        if(-1 != bundle->bond_hw_handle)
+        {
+            status = __ops_sai_lag_egress_enable_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev),true);
+            ERRNO_LOG_EXIT(status, "Failed to add lag member port to bundle");
+        }
+    }
+
+exit:
+    return status;
+}
+
+/*
+ * Remove port from bundle.
+ */
+static int
+__ofbundle_lag_tx_port_del(struct ofport_sai *port)
+{
+    struct ofbundle_sai *bundle;
+    int status = 0;
+    //uint32_t hw_id = netdev_sai_hw_id_get(port->up.netdev);
+
+    if (NULL == port) {
+        status = EINVAL;
+        ERRNO_LOG_EXIT(status, "Got NULL port to remove");
+    }
+
+    bundle = port->tx_lag_bundle;
+
+    if (STR_EQ(netdev_get_type(port->up.netdev), OVSREC_INTERFACE_TYPE_SYSTEM)) {
+        if(-1 != bundle->bond_hw_handle)
+        {
+            status = __ops_sai_lag_egress_enable_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev),false);
+            ERRNO_LOG_EXIT(status, "Failed to remove lag member port to bundle");
+        }
+    }
+
+exit:
+    list_remove(&port->bundle_tx_lag_node);
+    port->tx_lag_bundle = NULL;
+
+    return status;
+}
+
+static int
+__lag_tx_member_reconfigure(struct ofbundle_sai *bundle,
+                              const struct ofproto_bundle_settings *s)
+{
+    size_t i;
+    bool port_found = false;
+    int status = 0;
+    struct ofport_sai *port = NULL, *next_port = NULL, *s_port = NULL;
+
+    /* Figure out which tx ports were removed. */
+    LIST_FOR_EACH_SAFE(port, next_port, bundle_tx_lag_node, &bundle->tx_number_ports) {
+        port_found = false;
+        for (i = 0; i < s->n_slaves_tx_enable; i++) {
+            s_port = __get_ofp_port(bundle->ofproto, s->slaves_tx_enable[i]);
+            if (port == s_port) {
+                port_found = true;
+                break;
+            }
+        }
+        if (!port_found) {
+            status = __ofbundle_lag_tx_port_del(port);
+            ERRNO_LOG_EXIT(status, "Failed to remove lag number port");
+        }
+    }
+
+    /* Figure out which tx ports were added. */
+    port = NULL;
+    next_port = NULL;
+    for (i = 0; i < s->n_slaves_tx_enable; i++) {
+        port_found = false;
+        s_port = __get_ofp_port(bundle->ofproto, s->slaves_tx_enable[i]);
+
+        LIST_FOR_EACH_SAFE(port, next_port, bundle_tx_lag_node, &bundle->tx_number_ports) {
+            if (port == s_port) {
+                port_found = true;
+                break;
+            }
+        }
+
+        if (!port_found) {
+            status = __ofbundle_lag_tx_port_add(bundle,s_port);
+        }
+        ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
+    }
+
+exit:
+    return status;
+}
+
+/************************************ lag tx member end **********************************/
 
 /*
  * Reallocate bundle trunks.
@@ -819,11 +1086,25 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
     bitmap_not(added_trunks, VLAN_BITMAP_SIZE);
     bitmap_or(added_trunks, common_trunks, VLAN_BITMAP_SIZE);
     bitmap_not(added_trunks, VLAN_BITMAP_SIZE);
+    /* Native vlan resembles trunks behavior, but takes higher priority.
+     * If native vlan is the same as one of trunks, then we should handle
+     * native vlan and not this trunk. */
+    if (bundle->vlan_mode == PORT_VLAN_NATIVE_UNTAGGED ||
+        bundle->vlan_mode == PORT_VLAN_NATIVE_TAGGED) {
+        bitmap_set0(removed_trunks, bundle->vlan);
+        if (s->trunks && bitmap_is_set(s->trunks, bundle->vlan)) {
+            bitmap_set1(added_trunks, bundle->vlan);
+        }
+    }
+    if (s->vlan_mode == PORT_VLAN_NATIVE_UNTAGGED ||
+        s->vlan_mode == PORT_VLAN_NATIVE_TAGGED) {
+        bitmap_set0(added_trunks, s->vlan);
+    }
 
     /* Remove all ports from deleted vlans. */
     switch (bundle->vlan_mode) {
     case PORT_VLAN_ACCESS:
-        if (tag_changed) {
+        if (tag_changed || mod_changed) {
             LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
                 status = ops_sai_vlan_access_port_del(bundle->vlan,
                                                       netdev_sai_hw_id_get(port->up.netdev));
@@ -874,7 +1155,7 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
     /* Add all ports to new vlans. */
     switch (s->vlan_mode) {
     case PORT_VLAN_ACCESS:
-        if (tag_changed) {
+        if (tag_changed || mod_changed) {
             LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
                 status = ops_sai_vlan_access_port_add(s->vlan,
                                                       netdev_sai_hw_id_get(port->up.netdev));
@@ -978,8 +1259,466 @@ __ofbundle_ports_reconfigure(struct ofbundle_sai *bundle,
         ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
     }
 
+    if(-1 != bundle->bond_hw_handle)
+    {
+        status = __lag_tx_member_reconfigure(bundle, s);
+        ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
+    }
+
 exit:
     return status;
+}
+
+/*
+ * Reconfigures router interface.
+ *
+ * @param[in] bundle - Current configuration set on HW
+ * @param[in] s      - New configuration that should be applied
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int
+__ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
+                                   const struct ofproto_bundle_settings *s)
+{
+    int status = 0;
+    handle_t handle = HANDLE_INITIALIZAER;
+    enum router_intf_type rif_type;
+    const char *netdev_type = NULL;
+    struct ofport_sai *port = NULL;
+    struct ofport_sai *next_port = NULL;
+    struct ofproto_sai *ofproto = NULL;
+
+    ovs_assert(bundle != NULL);
+
+    ofproto = bundle->ofproto;
+
+    ovs_assert(STR_EQ(ofproto->up.type, SAI_INTERFACE_TYPE_VRF));
+
+    port = __get_ofp_port(ofproto, s->slaves[0]);
+    if (!port) {
+        status = -1;
+        ERRNO_LOG_EXIT(status, "Failed to get port (slave: %u)",
+                       s->slaves[0]);
+    }
+
+    netdev_type = netdev_get_type(port->up.netdev);
+    ovs_assert(netdev_type != NULL);
+
+    if (STR_EQ(netdev_type, OVSREC_INTERFACE_TYPE_INTERNAL)) {
+        rif_type = ROUTER_INTF_TYPE_VLAN;
+        handle.data = s->vlan;
+    } else if (STR_EQ(netdev_type, OVSREC_INTERFACE_TYPE_LOOPBACK)){
+        bundle->router_intf.is_loopback = true;
+        goto exit;
+    } else if (STR_EQ(netdev_type, OVSREC_INTERFACE_TYPE_VLANSUBINT)) {
+        /* Currently subinterface are not supported. */
+        goto exit;
+    } else {
+        rif_type = ROUTER_INTF_TYPE_PORT;
+        handle.data = netdev_sai_hw_id_get(port->up.netdev);
+    }
+
+    if (bundle->router_intf.created &&
+            !HANDLE_EQ(&bundle->router_intf.handle, &handle)) {
+        status = __ofbundle_router_intf_remove(bundle);
+        ERRNO_EXIT(status);
+    }
+
+    if (!bundle->router_intf.created) {
+        status = ops_sai_router_intf_create(&ofproto->vrid, rif_type, &handle,
+                                            NULL, 0,
+                                            &bundle->router_intf.rifid);
+        ERRNO_EXIT(status);
+        bundle->router_intf.created = true;
+        bundle->router_intf.handle = handle;
+        bundle->router_intf.enabled = false;
+
+        LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+            status = netdev_sai_set_router_intf_handle(port->up.netdev,
+                                                       &bundle->router_intf.rifid);
+            ERRNO_EXIT(status);
+        }
+    }
+
+    if (bundle->router_intf.created &&
+            bundle->router_intf.enabled != s->enable) {
+        status = ops_sai_router_intf_set_state(&bundle->router_intf.rifid,
+                                               s->enable);
+        ERRNO_EXIT(status);
+        bundle->router_intf.enabled = s->enable;
+    }
+
+exit:
+    return status;
+}
+
+/*
+ * Removes router interface configuration.
+ *
+ * @param[in] bundle - Current configuration set on HW
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int __ofbundle_router_intf_remove(struct ofbundle_sai *bundle)
+{
+    int status = 0;
+    struct ip_address *addr = NULL;
+    struct ip_address *next = NULL;
+    struct ofproto_sai *ofproto = NULL;
+    struct ofport_sai *port = NULL;
+    struct ofport_sai *next_port = NULL;
+
+    ovs_assert(bundle != NULL);
+    ovs_assert(bundle->ofproto != NULL);
+
+    ofproto = bundle->ofproto;
+
+    /* Remove all existing local routes before interface deletion */
+    HMAP_FOR_EACH_SAFE (addr, next, addr_node, &bundle->local_routes) {
+        status = ops_sai_route_remove(&ofproto->vrid, addr->address);
+        ERRNO_EXIT(status);
+
+        hmap_remove(&bundle->local_routes, &addr->addr_node);
+        free(addr->address);
+        free(addr);
+    }
+
+    if (bundle->router_intf.created) {
+        LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+            status = netdev_sai_set_router_intf_handle(port->up.netdev,
+                                                       NULL);
+            ERRNO_EXIT(status);
+        }
+
+        status = ops_sai_router_intf_remove(&bundle->router_intf.rifid);
+        ERRNO_EXIT(status);
+
+        memset(&bundle->router_intf, 0, sizeof(bundle->router_intf));
+    }
+
+exit:
+    return status;
+}
+
+/*
+ * Reconfigure interface IP addresses. Remove from HW deleted entries.
+ * Add new entries.
+ *
+ * @param[in] bundle - Current configuration set on HW
+ * @param[in] s      - New configuration that should be applied
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int __ofbundle_ip_reconfigure(struct ofbundle_sai *bundle,
+                                     const struct ofproto_bundle_settings *s)
+{
+    int status = 0;
+    struct ofproto *ofproto = NULL;
+
+    ovs_assert(bundle != NULL);
+    ovs_assert(bundle->ofproto != NULL);
+
+    ofproto = &bundle->ofproto->up;
+
+    /* If primary ipv4 got added/deleted/modified */
+    if (s->ip_change & PORT_PRIMARY_IPv4_CHANGED) {
+        if (!s->ip4_address ||
+                (bundle->ipv4_primary &&
+                        !STR_EQ(bundle->ipv4_primary, s->ip4_address))) {
+            if (bundle->ipv4_primary) {
+                status = __ofproto_ip_remove(ofproto,
+                                               bundle->ipv4_primary,
+                                               false);
+                ERRNO_EXIT(status);
+
+                free(bundle->ipv4_primary);
+                bundle->ipv4_primary = NULL;
+            }
+        }
+
+        if (s->ip4_address) {
+            /* Add new */
+            status = __ofproto_ip_add(ofproto, s->ip4_address, false);
+            ERRNO_EXIT(status);
+
+            bundle->ipv4_primary = xstrdup(s->ip4_address);
+        }
+    }
+
+    /* If primary ipv6 got added/deleted/modified */
+    if (s->ip_change & PORT_PRIMARY_IPv6_CHANGED) {
+        if (!s->ip6_address ||
+                (bundle->ipv6_primary &&
+                        !STR_EQ(bundle->ipv6_primary, s->ip6_address))) {
+            if (bundle->ipv6_primary) {
+                status = __ofproto_ip_remove(ofproto,
+                                               bundle->ipv6_primary,
+                                               true);
+                ERRNO_EXIT(status);
+
+                free(bundle->ipv6_primary);
+                bundle->ipv6_primary = NULL;
+            }
+        }
+
+        if (s->ip6_address) {
+            /* Add new */
+            status = __ofproto_ip_add(ofproto, s->ip6_address, true);
+            ERRNO_EXIT(status);
+
+            bundle->ipv6_primary = xstrdup(s->ip6_address);
+        }
+    }
+
+    if (s->ip_change & PORT_SECONDARY_IPv4_CHANGED) {
+        status = __ofbundle_ip_secondary_reconfigure(bundle, s, false);
+        ERRNO_EXIT(status);
+    }
+
+    if (s->ip_change & PORT_SECONDARY_IPv6_CHANGED) {
+        status = __ofbundle_ip_secondary_reconfigure(bundle, s, true);
+        ERRNO_EXIT(status);
+    }
+
+exit:
+    return status;
+}
+
+/*
+ * Remove interface IP addresses.
+ *
+ * @param[in] bundle - Current configuration set on HW
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int __ofbundle_ip_remove(struct ofbundle_sai *bundle)
+{
+    int status = 0;
+    struct ofproto *ofproto;
+    struct ip_address *addr = NULL;
+    struct ip_address *next = NULL;
+
+    ofproto = &bundle->ofproto->up;
+
+    /* Unconfigure primary ipv4 address and free */
+    if (bundle->ipv4_primary) {
+        status = __ofproto_ip_remove(ofproto, bundle->ipv4_primary, false);
+        ERRNO_EXIT(status);
+
+        free(bundle->ipv4_primary);
+    }
+
+    /* Unconfigure primary ipv6 address and free */
+    if (bundle->ipv6_primary) {
+        status = __ofproto_ip_remove(ofproto, bundle->ipv6_primary, true);
+        ERRNO_EXIT(status);
+
+        free(bundle->ipv6_primary);
+    }
+
+    /* Unconfigure secondary ipv4 address and free the hash */
+    HMAP_FOR_EACH_SAFE (addr, next, addr_node, &bundle->ipv4_secondary) {
+        status = __ofproto_ip_remove(ofproto, addr->address, false);
+        ERRNO_EXIT(status);
+
+        hmap_remove(&bundle->ipv4_secondary, &addr->addr_node);
+        free(addr->address);
+        free(addr);
+    }
+
+    /* Unconfigure secondary ipv6 address and free the hash */
+    HMAP_FOR_EACH_SAFE (addr, next, addr_node, &bundle->ipv6_secondary) {
+        status = __ofproto_ip_remove(ofproto, addr->address, true);
+        ERRNO_EXIT(status);
+
+        hmap_remove(&bundle->ipv6_secondary, &addr->addr_node);
+        free(addr->address);
+        free(addr);
+    }
+
+exit:
+    return status;
+}
+
+/*
+ * Reconfigure interface secondary IP addresses. Remove from HW all deleted
+ * entries. Add new entries.
+ *
+ * @param[in] bundle  - Current configuration set on HW
+ * @param[in] s       - New configuration that should be applied
+ * @param[in] is_ipv6 - Indicates whether IPv4 or IPv6 addresses should
+ *                      be reconfigured
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int __ofbundle_ip_secondary_reconfigure(struct ofbundle_sai *bundle,
+                                               const struct
+                                               ofproto_bundle_settings *s,
+                                               bool is_ipv6)
+{
+    int status = 0;
+    struct ofproto *ofproto = NULL;
+    struct shash new_ip_hash_map;
+    struct ip_address *addr = NULL;
+    struct ip_address *next = NULL;
+    struct shash_node *addr_node = NULL;
+    const char *address = NULL;
+    int i = 0;
+    struct hmap *bundle_ip_addresses = NULL;
+    size_t new_ip_num = 0;
+    char **new_ip_list = NULL;
+
+    ovs_assert(bundle != NULL);
+    ovs_assert(bundle->ofproto != NULL);
+
+    ofproto = &bundle->ofproto->up;
+
+    if (is_ipv6) {
+        bundle_ip_addresses = &bundle->ipv6_secondary;
+        new_ip_num = s->n_ip6_address_secondary;
+        new_ip_list = s->ip6_address_secondary;
+    } else {
+        bundle_ip_addresses = &bundle->ipv4_secondary;
+        new_ip_num = s->n_ip4_address_secondary;
+        new_ip_list = s->ip4_address_secondary;
+    }
+
+    shash_init(&new_ip_hash_map);
+
+    /* Create hash of the current secondary ip's */
+    for (i = 0; i < new_ip_num; i++) {
+       if(!shash_add_once(&new_ip_hash_map, new_ip_list[i],
+               new_ip_list[i])) {
+            VLOG_WARN("Duplicate address in secondary list %s\n",
+                      new_ip_list[i]);
+        }
+    }
+
+    /* Delete all removed */
+    HMAP_FOR_EACH_SAFE (addr, next, addr_node, bundle_ip_addresses) {
+        if (!shash_find_data(&new_ip_hash_map, addr->address)) {
+            status = __ofproto_ip_remove(ofproto, addr->address, false);
+            ERRNO_EXIT(status);
+
+            hmap_remove(bundle_ip_addresses, &addr->addr_node);
+            free(addr->address);
+            free(addr);
+        }
+    }
+
+    /* Add the newly added addresses to the list */
+    SHASH_FOR_EACH (addr_node, &new_ip_hash_map) {
+        address = addr_node->data;
+        if (!__ofbundle_ip_secondary_find(bundle, address)) {
+            status = __ofproto_ip_add(ofproto, address, false);
+            ERRNO_EXIT(status);
+
+            addr = xzalloc(sizeof *addr);
+            addr->address = xstrdup(address);
+            hmap_insert(bundle_ip_addresses, &addr->addr_node,
+                        hash_string(addr->address, 0));
+        }
+    }
+
+exit:
+    return status;
+}
+
+/*
+ * Check if IP address exists in cache.
+ *
+ * @param[in] bundle  - Current configuration set on HW
+ * @param[in] address - Searching IP address
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static struct ip_address *__ofbundle_ip_secondary_find(struct
+                                                       ofbundle_sai *bundle,
+                                                       const char *address)
+{
+    struct ip_address *addr = NULL;
+    struct hmap *bundle_ip_addresses = NULL;
+
+    if (addr_is_ipv6(address)) {
+        bundle_ip_addresses = &bundle->ipv6_secondary;
+    } else {
+        bundle_ip_addresses = &bundle->ipv4_secondary;
+    }
+
+    HMAP_FOR_EACH_WITH_HASH (addr, addr_node, hash_string(address, 0),
+                             bundle_ip_addresses) {
+        if (STR_EQ(addr->address, address)) {
+            return addr;
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Add IP address to interface.
+ *
+ * @param[in] ofproto_  - Pointer to ofproto structure.
+ * @param[in] ip        - IP address
+ * @param[in] is_ipv6   - Indicates if address is IPv4 or IPv6
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int __ofproto_ip_add(struct ofproto *ofproto_,
+                            const char *ip,
+                            bool is_ipv6)
+{
+    struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
+    char *ptr = NULL;
+    /* IP address length + strlen(/128) */
+    char prefix[INET6_ADDRSTRLEN + 5] = { };
+
+    VLOG_INFO("Adding IP address %s", ip);
+
+    strcpy(prefix, ip);
+    ptr = strchr(prefix, '/');
+    ovs_assert(ptr);
+
+    sprintf(ptr, "/%d", is_ipv6 ? 128 : 32);
+
+    return ops_sai_route_ip_to_me_add(&ofproto->vrid, prefix);
+}
+
+/*
+ * Remove IP address from interface.
+ *
+ * @param[in] ofproto_  - Pointer to ofproto structure.
+ * @param[in] ip        - IP address
+ * @param[in] is_ipv6   - Indicates if address is IPv4 or IPv6
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int __ofproto_ip_remove(struct ofproto *ofproto_,
+                                 const char *ip,
+                                 bool is_ipv6)
+{
+    struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
+    char *ptr = NULL;
+    char prefix[INET6_ADDRSTRLEN + 5]; /* IP address length + strlen(/128) */
+
+    VLOG_INFO("Removing IP address %s", ip);
+
+    strcpy(prefix, ip);
+    ptr = strchr(prefix, '/');
+    ovs_assert(ptr);
+
+    sprintf(ptr, "/%d", is_ipv6 ? 128 : 32);
+
+    return ops_sai_route_remove(&ofproto->vrid, prefix);
 }
 
 /*
@@ -1021,6 +1760,17 @@ __ofbundle_create(struct ofproto_sai *ofproto, void *aux,
     bundle->ofproto = ofproto;
     bundle->aux = aux;
 
+    bundle->ipv4_primary = NULL;
+    bundle->ipv6_primary = NULL;
+    hmap_init(&bundle->ipv4_secondary);
+    hmap_init(&bundle->ipv6_secondary);
+    hmap_init(&bundle->local_routes);
+    hmap_init(&bundle->neighbors);
+
+    bundle->bond_hw_handle = -1;
+//    list_init(&bundle->number_ports);
+    list_init(&bundle->tx_number_ports);
+
     return bundle;
 }
 
@@ -1031,20 +1781,44 @@ static void
 __ofbundle_destroy(struct ofbundle_sai *bundle)
 {
     int status = 0;
+    struct port         *port_      = NULL;
     struct ofport_sai *port = NULL, *next_port = NULL;
 
     if (NULL == bundle) {
         return;
     }
 
+    port_ = (struct port *)bundle->aux;
+
+    status = __ofbundle_ip_remove(bundle);
+    ERRNO_LOG(status,
+              "Failed to remove bundle IP addresses (bundle: %s)",
+               bundle->name);
+
+    status = __ofbundle_router_intf_remove(bundle);
+    ERRNO_LOG(status,
+              "Failed to remove router interface configuration (bundle: %s)",
+              bundle->name);
+
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
         status = __ofbundle_port_del(port);
-        ERRNO_LOG_EXIT(status, "Failed to destroy bundle");
+        ERRNO_LOG(status,
+                  "Failed to remove bundle port configuration (bundle: %s)",
+                  bundle->name);
     }
 
-exit:
+    if (bundle->bond_hw_handle != -1) {
+        ops_sai_lag_destroy(bundle->bond_hw_handle);
+        bundle->bond_hw_handle = -1;
+        port_->bond_hw_handle = bundle->bond_hw_handle;
+    }
+
     __ofbundle_rename(bundle, NULL);
     __trunks_realloc(bundle, NULL);
+    hmap_destroy(&bundle->ipv4_secondary);
+    hmap_destroy(&bundle->ipv6_secondary);
+    hmap_destroy(&bundle->local_routes);
+    hmap_destroy(&bundle->neighbors);
     hmap_remove(&bundle->ofproto->bundles, &bundle->hmap_node);
 
     free(bundle);
@@ -1056,7 +1830,10 @@ exit:
 static struct ofbundle_sai *
 __ofbundle_lookup(struct ofproto_sai *ofproto, void *aux)
 {
-    struct ofbundle_sai *bundle;
+    struct ofbundle_sai *bundle = NULL;
+
+    ovs_assert(ofproto);
+    ovs_assert(aux);
 
     HMAP_FOR_EACH_IN_BUCKET(bundle, hmap_node, hash_pointer(aux, 0),
                             &ofproto->bundles) {
@@ -1066,6 +1843,103 @@ __ofbundle_lookup(struct ofproto_sai *ofproto, void *aux)
     }
 
     return NULL;
+}
+
+static struct ofbundle_sai *
+__ofbundle_lookup_by_netdev_name(struct ofproto_sai *ofproto,
+                                   const char *name)
+{
+    struct ofport_sai *port = NULL;
+    struct ofbundle_sai *bundle = NULL;
+
+    ovs_assert(ofproto);
+    ovs_assert(name);
+
+    HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
+        LIST_FOR_EACH(port, bundle_node, &bundle->ports) {
+            if (STR_EQ(netdev_get_name(port->up.netdev), name)) {
+                return bundle;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static int
+__ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
+                               const struct ofproto_bundle_settings *s)
+{
+    //size_t              i;
+    struct port         *port_      = NULL;
+    //bool                port_found  = false;
+    int                 status      = 0;
+    //struct ofport_sai   *port       = NULL, *next_port = NULL, *s_port = NULL;
+
+    port_ = (struct port *)bundle->aux;
+
+    if (-1 == bundle->bond_hw_handle) {
+        if(s->hw_bond_should_exist || s->bond_handle_alloc_only) {
+            ops_sai_lag_create(&bundle->bond_hw_handle);
+
+            port_->bond_hw_handle = bundle->bond_hw_handle;
+
+            if (s->bond_handle_alloc_only) {
+                return 0;
+            }
+        }else{
+            return 0;
+        }
+    } else if(false == s->hw_bond_should_exist){
+        ops_sai_lag_destroy(bundle->bond_hw_handle);
+        bundle->bond_hw_handle = -1;
+
+        port_->bond_hw_handle = bundle->bond_hw_handle;
+
+        return 0;
+    }
+#if 0
+    /* Figure out which ports were removed. */
+    LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->number_ports) {
+        port_found = false;
+        for (i = 0; i < s->n_slaves; i++) {
+            s_port = __get_ofp_port(bundle->ofproto, s->slaves[i]);
+            if (port == s_port) {
+                port_found = true;
+                break;
+            }
+        }
+        if (!port_found) {
+            status = __ops_sai_lag_detach_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
+            ERRNO_LOG_EXIT(status, "Failed to remove lag number port");
+
+            list_push_back(&bundle->number_ports, &port->bundle_node);
+        }
+    }
+
+    /* Figure out which ports were added. */
+    port = NULL;
+    next_port = NULL;
+    for (i = 0; i < s->n_slaves; i++) {
+        port_found = false;
+        s_port = __get_ofp_port(bundle->ofproto, s->slaves[i]);
+
+        LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->number_ports) {
+            if (port == s_port) {
+                port_found = true;
+                break;
+            }
+        }
+
+        if (!port_found) {
+            status = __ops_sai_lag_attach_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(s_port->up.netdev));
+        }
+        ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
+    }
+
+exit:
+#endif
+    return status;
 }
 
 /*
@@ -1081,8 +1955,7 @@ __bundle_set(struct ofproto *ofproto_, void *aux,
 
     SAI_API_TRACE_FN();
 
-    if ((s && !strcmp(s->name, DEFAULT_BRIDGE_NAME)) ||
-        strcmp(ofproto_->type, SAI_INTERFACE_TYPE_SYSTEM)) {
+    if ((s && STR_EQ(s->name, DEFAULT_BRIDGE_NAME))) {
         goto exit;
     }
 
@@ -1096,8 +1969,21 @@ __bundle_set(struct ofproto *ofproto_, void *aux,
         bundle = __ofbundle_create(ofproto, aux, s);
     }
 
+    status = __ofbundle_lag_reconfigure(bundle, s);
+    ERRNO_LOG_EXIT(status, "Failed to set bundle lag");
+
     status = __ofbundle_ports_reconfigure(bundle, s);
-    ERRNO_LOG_EXIT(status, "Failed to set bundle");
+    ERRNO_LOG_EXIT(status, "Failed to set bundle ports");
+#if 0
+    if (s->n_slaves > 1) {
+        status = -1;
+        ERRNO_LOG_EXIT(status, "LAGs are not implemented");
+    }
+#endif
+    if (STR_EQ(ofproto_->type, SAI_INTERFACE_TYPE_VRF)) {
+        __ofbundle_router_intf_reconfigure(bundle, s);
+	    __ofbundle_ip_reconfigure(bundle, s);
+    }
 
 exit:
     return status;
@@ -1208,24 +2094,148 @@ __get_datapath_version(const struct ofproto *ofproto_ OVS_UNUSED)
     return strdup(SAI_DATAPATH_VERSION);
 }
 
+static struct neigbor_entry*
+__neigh_entry_hash_find(const char *ip_addr,
+                        const struct ofbundle_sai *bundle)
+{
+    struct neigbor_entry* neigh_entry = NULL;
+
+    ovs_assert(ip_addr);
+    ovs_assert(bundle);
+
+    HMAP_FOR_EACH_WITH_HASH(neigh_entry, neigh_node, hash_string(ip_addr, 0),
+                            &bundle->neighbors) {
+        if (STR_EQ(neigh_entry->ip_address, ip_addr)) {
+            return neigh_entry;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+__neigh_entry_hash_add(const char *mac_address,
+                       const char *ip_addr,
+                       struct ofbundle_sai *bundle)
+{
+    struct neigbor_entry* neigh_entry = NULL;
+
+    ovs_assert(mac_address);
+    ovs_assert(ip_addr);
+    ovs_assert(bundle);
+
+    if (NULL == __neigh_entry_hash_find(ip_addr, bundle)) {
+        neigh_entry = xzalloc(sizeof *neigh_entry);
+        neigh_entry->mac_address = xstrdup(mac_address);
+        neigh_entry->ip_address  = xstrdup(ip_addr);
+
+        hmap_insert(&bundle->neighbors, &neigh_entry->neigh_node,
+                    hash_string(neigh_entry->ip_address, 0));
+    }
+}
+
+static void
+__neigh_entry_hash_remove(const char *ip_addr,
+                          struct ofbundle_sai *bundle)
+{
+    struct neigbor_entry* neigh_entry = NULL;
+
+    ovs_assert(ip_addr);
+    ovs_assert(bundle);
+
+    neigh_entry = __neigh_entry_hash_find(ip_addr, bundle);
+    if (NULL != neigh_entry) {
+        hmap_remove(&bundle->neighbors, &neigh_entry->neigh_node);
+        free(neigh_entry->ip_address);
+        free(neigh_entry->mac_address);
+        free(neigh_entry);
+    }
+}
+
 static int
 __add_l3_host_entry(const struct ofproto *ofproto_, void *aux,
-                              bool is_ipv6_addr, char *ip_addr,
-                              char *next_hop_mac_addr, int *l3_egress_id)
+                    bool is_ipv6_addr, char *ip_addr,
+                    char *next_hop_mac_addr, int *l3_egress_id)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+    int status = 0;
+    struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
+    struct ofbundle_sai *bundle = __ofbundle_lookup(ofproto, aux);
+    struct neigbor_entry *neigh = NULL;
 
-    return 0;
+    SAI_API_TRACE_FN();
+
+    ovs_assert(bundle);
+    ovs_assert(bundle->router_intf.created);
+    ovs_assert(ip_addr);
+    ovs_assert(next_hop_mac_addr);
+
+    neigh = __neigh_entry_hash_find(ip_addr, bundle);
+
+    if (NULL != neigh && STR_EQ(neigh->mac_address, next_hop_mac_addr)) {
+        VLOG_WARN("Not adding neighbor entry as it was already added"
+                  "(ip address: %s, MAC: %s rifid: %lu)",
+                  ip_addr, next_hop_mac_addr,
+                  bundle->router_intf.rifid.data);
+    } else {
+        if (0 == strnlen(next_hop_mac_addr, MAC_STR_LEN)) {
+            VLOG_WARN("Received neighbor entry with empty MAC address."
+                      "(ip address: %s, rifid: %lu). Don't passing it to asic",
+                      ip_addr, bundle->router_intf.rifid.data);
+        } else {
+            if (NULL != neigh &&
+                0 == strnlen(neigh->mac_address,
+                             MAC_STR_LEN)) {
+                __neigh_entry_hash_remove(ip_addr, bundle);
+            }
+            status = ops_sai_neighbor_create(is_ipv6_addr,
+                                             ip_addr,
+                                             next_hop_mac_addr,
+                                             &bundle->router_intf.rifid);
+            ERRNO_EXIT(status);
+        }
+        __neigh_entry_hash_add(next_hop_mac_addr, ip_addr, bundle);
+    }
+
+    exit:
+    SAI_API_TRACE_EXIT_FN();
+    return status;
 }
 
 static int
 __delete_l3_host_entry(const struct ofproto *ofproto_, void *aux,
-                                 bool is_ipv6_addr, char *ip_addr,
-                                 int *l3_egress_id)
+                       bool is_ipv6_addr, char *ip_addr,
+                       int *l3_egress_id)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+    int status = 0;
+    struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
+    struct ofbundle_sai *bundle = __ofbundle_lookup(ofproto, aux);
+    struct neigbor_entry *neigh = NULL;
 
-    return 0;
+    SAI_API_TRACE_FN();
+
+    ovs_assert(bundle);
+    ovs_assert(bundle->router_intf.created);
+    ovs_assert(ip_addr);
+
+    neigh = __neigh_entry_hash_find(ip_addr, bundle);
+
+    if (NULL != neigh){
+        if (0 != strnlen(neigh->mac_address, MAC_STR_LEN)) {
+            status = ops_sai_neighbor_remove(is_ipv6_addr,
+                                             ip_addr,
+                                             &bundle->router_intf.rifid);
+            ERRNO_EXIT(status);
+        }
+        __neigh_entry_hash_remove(ip_addr, bundle);
+    } else {
+        VLOG_WARN("Not removing non-existing neighbor entry"
+                  "(ip address: %s, rifid: %lu)",
+                  ip_addr, bundle->router_intf.rifid.data);
+    }
+
+    exit:
+    SAI_API_TRACE_EXIT_FN();
+    return status;
 }
 
 static int
@@ -1233,9 +2243,41 @@ __get_l3_host_hit_bit(const struct ofproto *ofproto_, void *aux,
                                 bool is_ipv6_addr, char *ip_addr,
                                 bool *hit_bit)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+    int status = 0;
+    struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
+    struct ofbundle_sai *bundle = __ofbundle_lookup(ofproto, aux);
+    struct neigbor_entry *neigh = NULL;
 
-    return 0;
+    SAI_API_TRACE_FN();
+
+    ovs_assert(ip_addr);
+    ovs_assert(hit_bit);
+
+     neigh = __neigh_entry_hash_find(ip_addr, bundle);
+
+    if (NULL != neigh) {
+        if (0 == strnlen(neigh->mac_address, MAC_STR_LEN)) {
+            VLOG_INFO("Not getting neighbor activity for entry with "
+                      "empty MAC address(ip address: %s, rif: %lu)",
+                      ip_addr, bundle->router_intf.rifid.data);
+            *hit_bit = false;
+        } else {
+            status = ops_sai_neighbor_activity_get(is_ipv6_addr,
+                                                   ip_addr,
+                                                   &bundle->router_intf.rifid,
+                                                   hit_bit);
+            ERRNO_EXIT(status);
+            }
+        } else {
+            *hit_bit = false;
+            VLOG_WARN("Not getting neighbor activity for non-existing entry"
+                      "(ip address: %s, rif: %lu)",
+                      ip_addr, bundle->router_intf.rifid.data);
+            }
+
+exit:
+    SAI_API_TRACE_EXIT_FN();
+    return status;
 }
 
 static int
@@ -1243,26 +2285,135 @@ __l3_route_action(const struct ofproto *ofprotop,
                             enum ofproto_route_action action,
                             struct ofproto_route *routep)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+    int          status     = 0;
+    uint32_t     rnh_count  = 0;
+    struct ofproto_sai *sai_ofproto = __ofproto_sai_cast(ofprotop);
+    char *next_hops[routep->n_nexthops];
+    uint32_t lnh_count = 0;
+    char *egress_intf[routep->n_nexthops];
+    struct ofbundle_sai *bundle = NULL;
+    struct ip_address *addr = NULL;
 
-    return 0;
+    SAI_API_TRACE_FN();
+
+    for (uint32_t index=0; index < routep->n_nexthops; index ++) {
+        struct ofproto_route_nexthop *nh = &(routep->nexthops[index]);
+
+        switch (nh->type) {
+        case OFPROTO_NH_IPADDR:
+            next_hops[rnh_count++]   = nh->id;
+            break;
+        case OFPROTO_NH_PORT:
+            egress_intf[lnh_count++] = nh->id;
+            break;
+        default:
+            status = -1;
+            ERRNO_LOG_EXIT(status, "Unknown ofproto next hope type: %d",
+                                   routep->nexthops[index].type);
+        }
+    }
+
+    if (rnh_count) {
+        ovs_assert(lnh_count == 0);
+
+        switch (action) {
+        case OFPROTO_ROUTE_ADD:
+            status = ops_sai_route_remote_add(sai_ofproto->vrid,
+                                              routep->prefix,
+                                              rnh_count,
+                                              next_hops);
+            break;
+        case OFPROTO_ROUTE_DELETE_NH:
+            status = ops_sai_route_remote_nh_remove(sai_ofproto->vrid,
+                                                    routep->prefix,
+                                                    rnh_count,
+                                                    next_hops);
+            break;
+        case OFPROTO_ROUTE_DELETE:
+            status = ops_sai_route_remove(&sai_ofproto->vrid,
+                                          routep->prefix);
+            break;
+        default:
+            status = -1;
+            ERRNO_LOG_EXIT(status, "Unknown ofproto action %d", action);
+        }
+    } else if (lnh_count) {
+        ovs_assert(rnh_count == 0);
+        ovs_assert(lnh_count == 1);
+
+        bundle = __ofbundle_lookup_by_netdev_name(sai_ofproto,
+                                                  egress_intf[0]);
+        if (bundle && bundle->router_intf.is_loopback) {
+            goto exit;
+        }
+
+        switch (action) {
+        case OFPROTO_ROUTE_ADD:
+            ovs_assert(bundle);
+            ovs_assert(bundle->router_intf.created);
+
+            status = ops_sai_route_local_add(&sai_ofproto->vrid,
+                                             routep->prefix,
+                                             &bundle->router_intf.rifid);
+
+            addr = xzalloc(sizeof *addr);
+            addr->address = xstrdup(routep->prefix);
+            hmap_insert(&bundle->local_routes, &addr->addr_node,
+                        hash_string(addr->address, 0));
+
+            break;
+        case OFPROTO_ROUTE_DELETE:
+        case OFPROTO_ROUTE_DELETE_NH:
+            /* Bundle is already removed and all local routes are cleared */
+            if (!bundle) {
+                break;
+            }
+
+            HMAP_FOR_EACH_WITH_HASH (addr, addr_node,
+                    hash_string(routep->prefix, 0),
+                    &bundle->local_routes) {
+                if (STR_EQ(addr->address, routep->prefix)) {
+                    status = ops_sai_route_remove(&sai_ofproto->vrid,
+                                                  routep->prefix);
+                    ERRNO_EXIT(status);
+
+                    hmap_remove(&bundle->local_routes, &addr->addr_node);
+                    free(addr->address);
+                    free(addr);
+                    break;
+                }
+            }
+
+            break;
+        default:
+            status = -1;
+            ERRNO_LOG_EXIT(status, "Unknown ofproto action %d", action);
+        }
+    }
+
+exit:
+    SAI_API_TRACE_EXIT_FN();
+    return status;
 }
 
 static int
 __l3_ecmp_set(const struct ofproto *ofprotop, bool enable)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+    int error = 0;
 
-    return 0;
+    if (!enable) {
+        VLOG_ERR("Disabling ECMP is not supported");
+        return EOPNOTSUPP;
+    }
+
+    return error;
 }
 
 static int
 __l3_ecmp_hash_set(const struct ofproto *ofprotop, unsigned int hash,
                              bool enable)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-
-    return 0;
+    return ops_sai_ecmp_hash_set(hash, enable);
 }
 
 static int
@@ -1285,4 +2436,60 @@ __set_tables_version(struct ofproto *ofproto, cls_version_t version)
     SAI_API_TRACE_FN();
 
     return;
+}
+
+static void
+OVS_UNUSED __ofproto_bundle_settings_dump(const struct ofproto_bundle_settings *s)
+{
+    int i = 0;
+    int n = 0;
+    char buff[VLAN_BITMAP_SIZE * 4];
+    char *buff_ptr = buff;
+
+    if (!s) {
+        VLOG_INFO("Bundle settings: NULL");
+        return;
+    }
+
+    buff[0] = '\0';
+    if (s->trunks) {
+        for(i = 0; i < VLAN_BITMAP_SIZE; ++i) {
+            if (bitmap_is_set(s->trunks, i)) {
+                n = sprintf(buff_ptr, "%d,:%s", i, (i % 10) ? "" : "\n");
+                buff_ptr += n;
+            }
+        }
+    }
+
+    VLOG_INFO("Bundle settings:\n"
+              "\tname: %s\n"
+              "\tstate: %d\n"
+              "\tVLAN mode: %d\n"
+              "\tVLAN: %d\n"
+              "\tTrunks: %s\n"
+#ifdef OPS
+              "\tIP change: %d\n"
+              "\tIPv4 address: %s\n"
+              "\tIPv6 address: %s\n"
+#endif
+            "",
+              s->name, s->enable, s->vlan_mode, s->vlan, buff, s->ip_change,
+              s->ip_change & PORT_PRIMARY_IPv4_CHANGED ? s->ip4_address : "",
+              s->ip_change & PORT_PRIMARY_IPv6_CHANGED ? s->ip6_address: "");
+
+#ifdef OPS
+    if (s->ip_change & PORT_SECONDARY_IPv4_CHANGED) {
+        for (i = 0; i < s->n_ip4_address_secondary; ++i) {
+            VLOG_INFO("\tIPv4 secondary address: %s",
+                      s->ip4_address_secondary[i]);
+        }
+    }
+
+    if (s->ip_change & PORT_SECONDARY_IPv6_CHANGED) {
+        for (i = 0; i < s->n_ip6_address_secondary; ++i) {
+            VLOG_INFO("\tIPv6 secondary address: %s",
+                      s->ip6_address_secondary[i]);
+        }
+    }
+#endif
 }
