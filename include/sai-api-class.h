@@ -25,6 +25,7 @@ struct ops_sai_api_class {
     sai_hash_api_t *hash_api;
     sai_stp_api_t *stp_api;
     sai_lag_api_t *lag_api;
+    sai_fdb_api_t *fdb_api;
     int32_t initialized;
 };
 

@@ -351,6 +351,7 @@ static struct asic_plugin_interface __sai_interface = {
     .get_stg_port_state = &get_stg_port_state,
     .get_stg_default = &get_stg_default,
     .get_mac_learning_hmap = &sai_mac_learning_get_hmap,
+    .l2_addr_flush = sai_mac_learning_l2_addr_flush_handler,
 };
 
 void __sai_register_stg_mac_learning_init()

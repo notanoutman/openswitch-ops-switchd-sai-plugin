@@ -1,5 +1,5 @@
 /*
- * Copyright Mellanox Technologies, Ltd. 2001-2016.  
+ * Copyright Mellanox Technologies, Ltd. 2001-2016.
  * This software product is licensed under Apache version 2, as detailed in
  * the COPYING file.
  */
@@ -17,7 +17,7 @@ void netdev_sai_port_oper_state_changed(sai_object_id_t, int);
 int netdev_sai_set_router_intf_handle(struct netdev *, const handle_t *);
 
 
-void netdev_sai_port_name_id_from_hw_id(   sai_object_id_t oid,char *str);
-bool netdev_hw_id_from_name(const char *name, int *hw_id);
+void netdev_sai_get_port_name_by_hw_id(sai_object_id_t oid, char *str);
+bool netdev_sai_get_hw_id_by_name(const char *name,  int *hw_id);
 
 #endif /* sai-netdev.h */

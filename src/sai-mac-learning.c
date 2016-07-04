@@ -33,6 +33,8 @@
 
 VLOG_DEFINE_THIS_MODULE(sai_mac_learning);
 
+static struct vlog_rate_limit mac_learning_rl = VLOG_RATE_LIMIT_INIT(5, 20);
+
 /*
  * The buffers are defined as 2 because:
  *    To allow simultaneous read access to bridge.c and ops-mac-learning.c code
@@ -147,7 +149,7 @@ static void sai_mac_entry_add(
         }
     }
 
-    netdev_sai_port_name_id_from_hw_id(sai_port_id, port_name);
+    netdev_sai_get_port_name_by_hw_id(sai_port_id, port_name);
 
     if (!strlen(port_name)) {
         VLOG_ERR("%s: not able to find port name for port_id: %lx ", __FUNCTION__, sai_port_id);
@@ -233,7 +235,7 @@ int sai_mac_learning_run ()
  * for MAC learning.
  */
 static void
-ops_mac_learn_cb(
+sai_mac_learning_cb(
     uint32_t count,
     sai_fdb_event_notification_data_t *data)
 {
@@ -310,7 +312,7 @@ int sai_mac_learning_get_hmap(struct mlearn_hmap **mhmap)
 }
 
 static void *
-mac_learning_timer_main (void * args OVS_UNUSED)
+__sai_mac_learning_timer_main (void * args OVS_UNUSED)
 {
     while (true) {
         xsleep(TIMER_THREAD_TIMEOUT); /* in seconds */
@@ -344,25 +346,70 @@ sai_mac_learning_init()
         hmap_reserve(&(all_macs_learnt[idx].table), BUFFER_SIZE);
     }
 
-    ops_sai_fdb_event_register(ops_mac_learn_cb);
+    ops_sai_fdb_event_register(sai_mac_learning_cb);
 
-    sai_timer_thread = ovs_thread_create("ovs-sai-mac-learning-timer", mac_learning_timer_main, NULL);
+    sai_timer_thread = ovs_thread_create("ovs-sai-mac-learning-timer", __sai_mac_learning_timer_main, NULL);
 
-#if 0
-    for (idx = 0; idx < MAX_SWITCH_UNITS; idx++) {
-        rc = opennsl_l2_traverse(idx,
-                                 ops_l2_traverse_cb,
-                                 NULL);
-        if (rc != 0) {
-            VLOG_ERR("%s: error: %d\n", __FUNCTION__, rc);
-            return (rc);
-        }
-        rc = opennsl_l2_addr_register(idx, ops_mac_learn_cb, NULL);
-        if (OPENNSL_FAILURE(rc)) {
-            VLOG_ERR("L2 address registration failed");
-            return 1;
+    //fdb_l2_traverse
+
+    return (0);
+}
+
+/*
+ * Function: ops_l2_addr_flush_handler
+ *
+ * This function is invoked to flush MAC table entries on VLAN/PORT
+ *
+ */
+int
+sai_mac_learning_l2_addr_flush_handler(mac_flush_params_t *settings)
+{
+    sai_status_t       rc          	= SAI_STATUS_SUCCESS;
+    int 			hw_id 	= 0;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+    sai_attribute_t    attr[3]    = {};
+
+    /* Get Harware Port */
+    if (settings->options == L2MAC_FLUSH_BY_PORT
+        || settings->options == L2MAC_FLUSH_BY_PORT_VLAN) {
+        rc = netdev_sai_get_hw_id_by_name(settings->port_name, &hw_id);
+        if (rc == false) {
+            VLOG_ERR_RL(&mac_learning_rl, "%s: %s name not found flags %u mode %d",
+                        __FUNCTION__, settings->port_name,
+                        settings->flags,
+                        settings->options);
+
+            return -1; /* Return error */
         }
     }
-#endif
-    return (0);
+
+    switch (settings->options) {
+    case L2MAC_FLUSH_BY_VLAN:
+	attr[0].id = SAI_FDB_FLUSH_ATTR_VLAN_ID;
+	attr[0].value.u16 = settings->vlan;
+	sai_api->fdb_api->flush_fdb_entries(1,attr);
+        break;
+
+    case L2MAC_FLUSH_BY_TRUNK:
+    case L2MAC_FLUSH_BY_PORT:
+	attr[0].id = SAI_FDB_FLUSH_ATTR_PORT_ID;
+	attr[0].value.u16 = ops_sai_api_hw_id2port_id(hw_id);
+	sai_api->fdb_api->flush_fdb_entries(1,attr);
+        break;
+
+    case L2MAC_FLUSH_BY_TRUNK_VLAN:
+    case L2MAC_FLUSH_BY_PORT_VLAN:
+	attr[0].id = SAI_FDB_FLUSH_ATTR_VLAN_ID;
+	attr[0].value.u16 = settings->vlan;
+	attr[1].id = SAI_FDB_FLUSH_ATTR_PORT_ID;
+	attr[1].value.u16 = ops_sai_api_hw_id2port_id(hw_id);
+	sai_api->fdb_api->flush_fdb_entries(2,attr);
+        break;
+
+     default:
+        VLOG_ERR("%s: Unknown flush mode %d", __FUNCTION__, settings->options);
+        return -1;
+    }
+
+    return rc;
 }

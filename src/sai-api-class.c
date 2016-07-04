@@ -110,6 +110,10 @@ ops_sai_api_init(void)
                            (void **) &sai_api.lag_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize LAG api");
 
+    status = sai_api_query(SAI_API_FDB,
+                           (void **) &sai_api.fdb_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize FDB api");
+
 //    status = __init_ports();
     SAI_ERROR_LOG_EXIT(status, "Failed to create interfaces");
 

@@ -1156,7 +1156,7 @@ set_stg_port_state(char *port_name, int stg,
     int hw_id = 0;
 
     VLOG_DBG("%s: called", __FUNCTION__);
-    if (false == netdev_hw_id_from_name(port_name, &hw_id)) {
+    if (false == netdev_sai_get_hw_id_by_name(port_name, &hw_id)) {
         VLOG_ERR("%s: unable to find netdev for port %s", __FUNCTION__,
                  port_name);
         return -1;
@@ -1184,7 +1184,7 @@ get_stg_port_state(char *port_name, int stg, int *p_port_state)
     int hw_id = 0;
 
     VLOG_DBG("%s: called", __FUNCTION__);
-    if (false == netdev_hw_id_from_name(port_name, &hw_id)) {
+    if (false == netdev_sai_get_hw_id_by_name(port_name, &hw_id)) {
         VLOG_ERR("%s: unable to find netdev for port %s", __FUNCTION__, port_name);
         return -1;
     }

@@ -29,5 +29,6 @@
 extern int sai_mac_learning_init();
 
 extern int sai_mac_learning_get_hmap(struct mlearn_hmap **mhmap);
+extern int sai_mac_learning_l2_addr_flush_handler(mac_flush_params_t *settings);
 
 #endif /* __OPS_MAC_LEARNING_H__ */
