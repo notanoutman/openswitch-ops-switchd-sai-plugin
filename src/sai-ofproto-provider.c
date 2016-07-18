@@ -33,8 +33,9 @@
 #include <sai-neighbor.h>
 #include <sai-hash.h>
 #include <sai-mac-learning.h>
-#include <sai-stg.h>
+#include <sai-stp.h>
 #include <sai-lag.h>
+#include <sai-fdb.h>
 #include "asic-plugin.h"
 
 #include "bridge.h"
@@ -342,19 +343,119 @@ ofproto_sai_register(void)
     ofproto_class_register(&ofproto_sai_class);
 }
 
+
+static int stp_default_id = -1;
+static int
+__stp_init()
+{
+    ops_sai_stp_get_default_instance(&stp_default_id);
+
+    if (-1 == stp_default_id) {
+        VLOG_ERR("stp create error for default stgid");
+        return -1;
+    }
+
+    VLOG_INFO("stp created for default stg-id %d", stp_default_id);
+
+    return 0;
+}
+
+static int
+__stp_create(int *stpid)
+{
+    VLOG_DBG("%s: create stg entry called", __FUNCTION__);
+
+    return ops_sai_stp_create(stpid);
+}
+
+static int
+__stp_remove(int stgid)
+{
+    VLOG_DBG("%s: entry, stg=%d", __FUNCTION__, stgid);
+
+    return ops_sai_stp_remove(stgid);
+}
+
+static int
+__stp_add_vlan(int stgid, int vid)
+{
+    VLOG_DBG("%s: entry, stg=%d, vid=%d", __FUNCTION__, stgid,vid);
+
+    return ops_sai_stp_add_vlan(stgid, vid);
+}
+
+static int
+__stp_remove_vlan(int stgid, int vid)
+{
+    VLOG_DBG("%s: entry, stg=%d, vid=%d", __FUNCTION__, stgid,vid);
+
+    return ops_sai_stp_remove_vlan(stgid, vid);
+}
+
+static int
+__stp_set_port_state(char *port_name,
+                         int  stgid,
+                         int  port_state,
+                         bool port_stp_set)
+{
+    int hw_id = 0;
+    int stp_id = stgid;
+
+    VLOG_DBG("%s: entry, stg=%d, port_state=%d, port_stp_set=%d", __FUNCTION__, stgid,port_state,port_stp_set);
+
+    if (false == netdev_sai_get_hw_id_by_name(port_name, &hw_id)) {
+        VLOG_ERR("%s: unable to find netdev for port %s", __FUNCTION__,
+                 port_name);
+        return -1;
+    }
+
+    if(port_stp_set)
+    {
+        stp_id = stp_default_id;
+    }
+
+    return ops_sai_stp_set_port_state(stp_id,hw_id,port_state);
+}
+
+static int
+__stp_get_port_state(char *port_name,
+                         int  stgid,
+                         int  *port_state)
+{
+    int hw_id = 0;
+    int stp_id = stgid;
+
+    VLOG_DBG("%s: entry, stg=%d", __FUNCTION__, stgid);
+
+    if (false == netdev_sai_get_hw_id_by_name(port_name, &hw_id)) {
+        VLOG_ERR("%s: unable to find netdev for port %s", __FUNCTION__,
+                 port_name);
+        return -1;
+    }
+
+    return ops_sai_stp_get_port_state(stp_id,hw_id,port_state);
+}
+
+static int
+__stp_get_default(int *stgid)
+{
+    return ops_sai_stp_get_default_instance(stgid);
+}
+
+
 static struct asic_plugin_interface __sai_interface = {
-    .create_stg = &create_stg,
-    .delete_stg = &delete_stg,
-    .add_stg_vlan = &add_stg_vlan,
-    .remove_stg_vlan = &remove_stg_vlan,
-    .set_stg_port_state = &set_stg_port_state,
-    .get_stg_port_state = &get_stg_port_state,
-    .get_stg_default = &get_stg_default,
+    .create_stg         = &__stp_create,
+    .delete_stg         = &__stp_remove,
+    .add_stg_vlan       = &__stp_add_vlan,
+    .remove_stg_vlan    = &__stp_remove_vlan,
+    .set_stg_port_state = &__stp_set_port_state,
+    .get_stg_port_state = &__stp_get_port_state,
+    .get_stg_default    = &__stp_get_default,
     .get_mac_learning_hmap = &sai_mac_learning_get_hmap,
-    .l2_addr_flush = sai_mac_learning_l2_addr_flush_handler,
+    .l2_addr_flush         = sai_mac_learning_l2_addr_flush_handler,
 };
 
-void __sai_register_stg_mac_learning_init()
+void __sai_register_stg_mac_learning_plugin_init()
 {
     struct plugin_extension_interface sai_extension;
 
@@ -385,11 +486,13 @@ __init(const struct shash *iface_hints)
     ops_sai_route_init();
     ops_sai_host_intf_traps_register();
     ops_sai_ecmp_hash_init();
+    ops_sai_lag_init();
+    ops_sai_stp_init();
+    ops_sai_fdb_init();
 
+    __stp_init();
     sai_mac_learning_init();
-    __sai_register_stg_mac_learning_init();
-
-    ops_stg_init(0);
+    __sai_register_stg_mac_learning_plugin_init();
 }
 
 static void
@@ -836,7 +939,7 @@ __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
 
     if(-1 != bundle->bond_hw_handle)
     {
-        status = __ops_sai_lag_attach_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
+        status = ops_sai_lag_member_port_add(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
         ERRNO_LOG_EXIT(status, "Failed to add lag member port to bundle");
     }
 
@@ -875,7 +978,7 @@ __ofbundle_port_del(struct ofport_sai *port)
 
     if(-1 != bundle->bond_hw_handle)
     {
-        status = __ops_sai_lag_detach_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
+        status = ops_sai_lag_member_port_del(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
         ERRNO_LOG_EXIT(status, "Failed to remove lag member port to bundle");
     }
 
@@ -895,7 +998,6 @@ static int
 __ofbundle_lag_tx_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
 {
     int status = 0;
-    //uint32_t hw_id = netdev_sai_hw_id_get(port->up.netdev);
 
     if (NULL == port) {
         status = EINVAL;
@@ -905,7 +1007,6 @@ __ofbundle_lag_tx_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
     /* Port belongs to other bundle - remove. */
     if (NULL != port->tx_lag_bundle) {
         VLOG_WARN("Add lag tx member port to bundle: removing port from old bundle");
-//        __bundle_remove(&port->up);
     }
 
     port->tx_lag_bundle = bundle;
@@ -914,7 +1015,7 @@ __ofbundle_lag_tx_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
     if (STR_EQ(netdev_get_type(port->up.netdev), OVSREC_INTERFACE_TYPE_SYSTEM)) {
         if(-1 != bundle->bond_hw_handle)
         {
-            status = __ops_sai_lag_egress_enable_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev),true);
+            status = ops_sai_lag_set_tx_enable(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev),true);
             ERRNO_LOG_EXIT(status, "Failed to add lag member port to bundle");
         }
     }
@@ -931,7 +1032,6 @@ __ofbundle_lag_tx_port_del(struct ofport_sai *port)
 {
     struct ofbundle_sai *bundle;
     int status = 0;
-    //uint32_t hw_id = netdev_sai_hw_id_get(port->up.netdev);
 
     if (NULL == port) {
         status = EINVAL;
@@ -943,7 +1043,7 @@ __ofbundle_lag_tx_port_del(struct ofport_sai *port)
     if (STR_EQ(netdev_get_type(port->up.netdev), OVSREC_INTERFACE_TYPE_SYSTEM)) {
         if(-1 != bundle->bond_hw_handle)
         {
-            status = __ops_sai_lag_egress_enable_port(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev),false);
+            status = ops_sai_lag_set_tx_enable(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev),false);
             ERRNO_LOG_EXIT(status, "Failed to remove lag member port to bundle");
         }
     }
@@ -1809,7 +1909,7 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
     }
 
     if (bundle->bond_hw_handle != -1) {
-        ops_sai_lag_destroy(bundle->bond_hw_handle);
+        ops_sai_lag_remove(bundle->bond_hw_handle);
         bundle->bond_hw_handle = -1;
         port_->bond_hw_handle = bundle->bond_hw_handle;
     }
@@ -1884,15 +1984,17 @@ __ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
             ops_sai_lag_create(&bundle->bond_hw_handle);
 
             port_->bond_hw_handle = bundle->bond_hw_handle;
-
+#if 0
             if (s->bond_handle_alloc_only) {
                 return 0;
             }
+#endif
         }else{
             return 0;
         }
     } else if(false == s->hw_bond_should_exist){
-        ops_sai_lag_destroy(bundle->bond_hw_handle);
+        ops_sai_lag_remove(bundle->bond_hw_handle);
+
         bundle->bond_hw_handle = -1;
 
         port_->bond_hw_handle = bundle->bond_hw_handle;
@@ -2493,4 +2595,64 @@ OVS_UNUSED __ofproto_bundle_settings_dump(const struct ofproto_bundle_settings *
         }
     }
 #endif
+}
+
+int
+ofbundle_get_port_name_by_handle_id(handle_t    port_id,
+                                                 char        *str)
+{
+    struct ofproto_sai  *ofproto_sai  = NULL;
+    struct ofbundle_sai *ofbundle_sai = NULL;
+    handle_t            hand_id       = HANDLE_INITIALIZAER;
+
+    HMAP_FOR_EACH(ofproto_sai, all_ofproto_sai_node, &all_ofproto_sai) {
+        if (STR_EQ(ofproto_sai->up.type,SAI_INTERFACE_TYPE_SYSTEM))
+        {
+            HMAP_FOR_EACH(ofbundle_sai, hmap_node, &ofproto_sai->bundles) {
+                if(-1 == ofbundle_sai->bond_hw_handle)
+                    continue;
+
+                if (!ops_sai_lag_get_handle_id(ofbundle_sai->bond_hw_handle, &hand_id))
+                {
+                    if(HANDLE_EQ(&hand_id,&port_id))
+                    {
+                        strcpy(str,ofbundle_sai->name);
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+
+    return -1;
+}
+
+int
+ofbundle_get_handle_id_by_port_name(const char *name, handle_t *handle_id)
+{
+    struct ofproto_sai  *ofproto_sai  = NULL;
+    struct ofbundle_sai *ofbundle_sai = NULL;
+    handle_t            hand_id       = HANDLE_INITIALIZAER;
+
+    HMAP_FOR_EACH(ofproto_sai, all_ofproto_sai_node, &all_ofproto_sai) {
+        if (STR_EQ(ofproto_sai->up.type,SAI_INTERFACE_TYPE_SYSTEM))
+        {
+            HMAP_FOR_EACH(ofbundle_sai, hmap_node, &ofproto_sai->bundles) {
+                if(-1 == ofbundle_sai->bond_hw_handle)
+                    continue;
+
+                if(STR_EQ(name, ofbundle_sai->name))
+                {
+                    if (!ops_sai_lag_get_handle_id(ofbundle_sai->bond_hw_handle, &hand_id))
+                    {
+                        return 0;
+                    }
+
+                    return -1;
+                }
+            }
+        }
+    }
+
+    return -1;
 }

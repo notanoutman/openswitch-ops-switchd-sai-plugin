@@ -1,164 +1,370 @@
 /*
- * Copyright Centec Networks Inc. 2001-2016.
+ * Copyright centec Networks Inc., Ltd. 2001-2016.
  * This software product is licensed under Apache version 2, as detailed in
  * the COPYING file.
  */
-
 #ifndef __BOOL_DEFINED
 #define __BOOL_DEFINED
 #endif
 
-#include <netdev-provider.h>
+#include <hmap.h>
+#include <hash.h>
+
+#include <ofproto/ofproto.h>
+
 #include <sai-log.h>
-#include <sai-vendor.h>
 #include <sai-api-class.h>
 #include <sai-lag.h>
 
 VLOG_DEFINE_THIS_MODULE(sai_lag);
 
-static struct hmap sai_lap_data = HMAP_INITIALIZER(&sai_lap_data);
+struct hlag_entry {
+    struct hmap_node    hmap_node;
+    handle_t            handle;
+    int                 lagid;
+    struct hmap         hmap_member_ports;
+};
 
+struct hlag_member_entry {
+    struct hmap_node    hmap_node;
+    handle_t            handle;
+    uint32_t            hw_id;
+};
 
-#define CTC_SAI_OBJECT_TYPE_GET(objid)  							\
-    ((objid >> 32) & 0xFF)
+static struct hmap all_lag = HMAP_INITIALIZER(&all_lag);
 
-#define CTC_SAI_OBJECT_INDEX_GET(objid)  							\
-    (objid & 0xFFFFFFFF)
+static unsigned long *bitmap_index = NULL;
 
-int
-ops_sai_api_sai_lag_id2lag_id(sai_object_id_t sai_lag_id)
+void __lag_init(void);
+void __lag_deinit(void);
+int  __lag_create(int *lagid);
+int  __lag_remove(int lagid);
+int  __lag_member_port_add(int,uint32_t);
+int  __lag_member_port_del(int,uint32_t);
+int  __lag_set_tx_enable(int,uint32_t,bool);
+int  __lag_set_balance_mode(int,int);
+
+static int
+__lag_idle_index_init(unsigned long **bitmap_index)
 {
-    return CTC_SAI_OBJECT_INDEX_GET(sai_lag_id);
+    *bitmap_index = bitmap_allocate1(INT_MAX);
+
+    return 0;
 }
 
-sai_object_id_t
-ops_sai_api_lag_id2sai_lag_id(int lag_id)
+static int
+__lag_idle_index_get(unsigned long *bitmap_index)
 {
-	return (((sai_object_id_t)(SAI_OBJECT_TYPE_LAG)<<32 )| (sai_object_id_t)lag_id);
-}
+    int idle_index = 0;
 
-sai_object_id_t
-ops_sai_api_hw_id2sai_lag_member_id(int hw_id)
-{
-	return (((sai_object_id_t)(SAI_OBJECT_TYPE_LAG_MEMBER)<<32 )| (sai_object_id_t)hw_id);
-}
-
-static ops_sai_lag_data_t *
-__find_lag_data(int lag_id)
-{
-    ops_sai_lag_data_t *lagp = NULL;
-    ops_sai_lag_data_t *tmp_lagp = NULL;
-
-    HMAP_FOR_EACH(tmp_lagp, hmap_lag_data, &sai_lap_data) {
-        if (tmp_lagp->lag_id != lag_id) {
-            continue;
-        }
-        lagp = tmp_lagp;
-        break;
+    BITMAP_FOR_EACH_1 (idle_index, INT_MAX, bitmap_index) {
+        bitmap_set0(bitmap_index, idle_index);
+        return idle_index;
     }
 
-    return lagp;
+    return -1;
+}
 
+static int
+__lag_idle_index_put(unsigned long *bitmap_index, int index)
+{
+    bitmap_set1(bitmap_index, index);
+    return -1;
+}
+
+static struct hlag_entry*
+__lag_entry_hmap_find_create(struct hmap *hlag_hmap, int lagid, bool is_create)
+{
+    struct hlag_entry* hlag_entry = NULL;
+    int                _cur_lag_id = 0;;
+
+    NULL_PARAM_LOG_ABORT(hlag_hmap);
+
+    HMAP_FOR_EACH(hlag_entry, hmap_node, hlag_hmap) {
+        if (hlag_entry->lagid == lagid) {
+            return hlag_entry;
+        }
+    }
+
+    if (false == is_create) {
+        return NULL;
+    }
+
+    _cur_lag_id = __lag_idle_index_get(bitmap_index);
+
+    if(-1 == _cur_lag_id) {
+        return NULL;
+    }
+
+    hlag_entry = xzalloc(sizeof(struct hlag_entry));
+    if (!hlag_entry) {
+        VLOG_ERR("Failed to allocate memory for LAG id =%d",lagid);
+
+        __lag_idle_index_put(bitmap_index, _cur_lag_id);
+        return NULL;
+    }
+
+    hlag_entry->lagid = _cur_lag_id;
+
+    hmap_init(&hlag_entry->hmap_member_ports);
+
+    hmap_insert(&all_lag, &hlag_entry->hmap_node, hash_int(hlag_entry->lagid, 0));
+
+    return hlag_entry;
 }
 
 static void
-__free_lag_data(ops_sai_lag_data_t *lagp)
+__lag_entry_hmap_remove(struct hmap *hlag_hmap, struct hlag_entry *hlag_entry)
 {
-    bitmap_free(lagp->pbmp_ports);
-    bitmap_free(lagp->pbmp_egr_en);
+    struct hlag_member_entry* hlag_member_entry = NULL;
+    struct hlag_member_entry* hlag_member_entry_next = NULL;
 
-    hmap_remove(&sai_lap_data, &lagp->hmap_lag_data);
-    free(lagp);
-}
-
-static ops_sai_lag_data_t *
-__get_lag_data(int lag_id)
-{
-    ops_sai_lag_data_t *lagp = NULL;
-
-    lagp = __find_lag_data(lag_id);
-    if (lagp == NULL) {
-        // LAG data hasn't been created yet.
-        lagp = malloc(sizeof(ops_sai_lag_data_t));
-        if (!lagp) {
-            VLOG_ERR("Failed to allocate memory for LAG id=%d", lag_id);
-            return NULL;
-        }
-
-        // lag_id is allocated by bcmsdk later.
-        lagp->lag_id = -1;
-        lagp->hw_created = 0;
-
-        lagp->pbmp_ports  = bitmap_allocate(SAI_PORTS_MAX);
-        lagp->pbmp_egr_en = bitmap_allocate(SAI_PORTS_MAX);
-
-        hmap_insert(&sai_lap_data, &lagp->hmap_lag_data,
-                hash_int(lag_id, 0));
+    HMAP_FOR_EACH_SAFE(hlag_member_entry,hlag_member_entry_next,
+                       hmap_node, &hlag_entry->hmap_member_ports) {
+        hmap_remove(&hlag_entry->hmap_member_ports,&hlag_member_entry->hmap_node);
+        free(hlag_member_entry);
+        hlag_member_entry = NULL;
     }
 
-    return lagp;
+    hmap_destroy(&hlag_entry->hmap_member_ports);
+    hmap_remove(hlag_hmap,&hlag_entry->hmap_node);
+
+    __lag_idle_index_put(bitmap_index, hlag_entry->lagid);
+
+    free(hlag_entry);
 }
 
-int
-__ops_sai_lag_attach_port(int lag_id, int hw_port)
+static void
+__lag_member_hmap_add(struct hmap *hlag_member_hmap,
+                               const struct hlag_member_entry *hlag_member_entry)
 {
-    sai_status_t                    status      = SAI_STATUS_SUCCESS;
-    const struct ops_sai_api_class  *sai_api    = ops_sai_api_get_instance();
-    sai_object_id_t                 sai_lag_number_id = 0;
-    sai_attribute_t                 attr[2];
+    struct hlag_member_entry *hlag_member_entry_int = NULL;
 
-    VLOG_DBG("Trunk Attach: hw_port=%d, tid=%d",
-               hw_port, lag_id);
+    NULL_PARAM_LOG_ABORT(hlag_member_hmap);
+    NULL_PARAM_LOG_ABORT(hlag_member_entry);
 
-    attr[0].id = SAI_LAG_MEMBER_ATTR_LAG_ID;
-    attr[0].value.oid = (((sai_object_id_t)(SAI_OBJECT_TYPE_LAG)<<32 )| (sai_object_id_t)lag_id);;
+    hlag_member_entry_int = xzalloc(sizeof(*hlag_member_entry_int));
+    memcpy(hlag_member_entry_int, hlag_member_entry, sizeof(*hlag_member_entry_int));
 
-    attr[1].id = SAI_LAG_MEMBER_ATTR_PORT_ID;
-    attr[1].value.oid = ops_sai_api_hw_id2port_id(hw_port);
+    hmap_insert(hlag_member_hmap, &hlag_member_entry_int->hmap_node,
+                hash_int(hlag_member_entry_int->hw_id, 0));
+}
 
-    status = sai_api->lag_api->create_lag_member(&sai_lag_number_id, sizeof(attr)/sizeof(attr[0]), attr);
+static struct hlag_member_entry*
+__lag_member_hmap_find(struct hmap *hlag_member_hmap,
+                               uint32_t hw_id)
+{
+    struct hlag_member_entry *hlag_member_entry = NULL;
+
+    HMAP_FOR_EACH(hlag_member_entry, hmap_node, hlag_member_hmap) {
+        if (hlag_member_entry->hw_id == hw_id) {
+            return hlag_member_entry;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+__lag_member_hmap_del(struct hmap *hlag_member_hmap,
+                              struct hlag_member_entry *hlag_member_entry)
+{
+    NULL_PARAM_LOG_ABORT(hlag_member_hmap);
+    NULL_PARAM_LOG_ABORT(hlag_member_entry);
+
+    hmap_remove(hlag_member_hmap,&hlag_member_entry->hmap_node);
+    free(hlag_member_entry);
+}
+
+/*
+ * Initialize Lags.
+ */
+void
+__lag_init(void)
+{
+    VLOG_INFO("Initializing Lags");
+
+    __lag_idle_index_init(&bitmap_index);
+}
+
+/*
+ * De-initialize Lags.
+ */
+void
+__lag_deinit(void)
+{
+    VLOG_INFO("De-initializing Lags");
+}
+
+/*
+ * Creates Lag.
+ */
+int
+__lag_create(int *lagid)
+{
+    sai_status_t        status      = SAI_STATUS_SUCCESS;
+    struct hlag_entry   *hlag_entry = NULL;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    VLOG_INFO("Creates Lags");
+
+    hlag_entry = __lag_entry_hmap_find_create(&all_lag, *lagid, true);
+
+    if(!hlag_entry)
+        return -1;
+
+    status = sai_api->lag_api->create_lag(&hlag_entry->handle.data, 0, NULL);
 
     SAI_ERROR_LOG_EXIT(status, "Failed to create lag");
 
-    VLOG_DBG("Done.");
-
-    return 0;
+    *lagid = hlag_entry->lagid;
 exit:
-    return 0;
+    return SAI_ERROR_2_ERRNO(status);
 }
 
+/*
+ * Removes Lag.
+ */
 int
-__ops_sai_lag_detach_port(int lag_id, int hw_port)
+__lag_remove(int lagid)
 {
-    sai_status_t                    status      = SAI_STATUS_SUCCESS;
-    const struct ops_sai_api_class  *sai_api    = ops_sai_api_get_instance();
-    sai_object_id_t                 sai_lag_number_id = 0;
+    sai_status_t        status      = SAI_STATUS_SUCCESS;
+    struct hlag_entry   *hlag_entry = NULL;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
-    VLOG_DBG("Trunk Detach: hw_port=%d, tid=%d",
-               hw_port, lag_id);
+    VLOG_INFO("Removes Lags");
 
-    sai_lag_number_id = ops_sai_api_hw_id2sai_lag_member_id(hw_port);
-    status = sai_api->lag_api->remove_lag_member(sai_lag_number_id);
+    hlag_entry = __lag_entry_hmap_find_create(&all_lag, lagid, false);
 
-    SAI_ERROR_LOG_EXIT(status, "Failed to detach lag");
+    if(!hlag_entry) {
+        VLOG_WARN("Deleting non-existing LAG, LAG_ID=%d", lagid);
+        return -1;
+    }
 
-    VLOG_DBG("Done.");
+    status = sai_api->lag_api->remove_lag(hlag_entry->handle.data);
 
-    return 0;
+    SAI_ERROR_LOG_EXIT(status, "Failed to remove LAG, LAG_ID=%d", lagid);
+
+    __lag_entry_hmap_remove(&all_lag, hlag_entry);
+
 exit:
-    return 0;
+    return SAI_ERROR_2_ERRNO(status);
 }
 
+/*
+ * Adds member port to lag.
+ */
 int
-__ops_sai_lag_egress_enable_port(int lag_id, int hw_port, int enable)
+__lag_member_port_add(int        lagid,
+                             uint32_t   hw_id)
 {
     sai_status_t                    status      = SAI_STATUS_SUCCESS;
+    struct hlag_entry               *hlag_entry = NULL;
+    struct hlag_member_entry        hlag_member_entry;
     const struct ops_sai_api_class  *sai_api    = ops_sai_api_get_instance();
-    sai_object_id_t                 sai_lag_number_id = 0;
-    sai_attribute_t                 attr = {0};
+    sai_attribute_t                 attr[2];
 
-    VLOG_DBG("Trunk Detach: hw_port=%d, tid=%d",
-               hw_port, lag_id);
+    VLOG_INFO("Adds member port to lag. hw_port=%d, tid=%d",
+               hw_id, lagid);
+
+    memset(&hlag_member_entry,0,sizeof(struct hlag_member_entry));
+    memset(attr,0,sizeof(sai_attribute_t) * 2);
+
+    hlag_entry = __lag_entry_hmap_find_create(&all_lag, lagid, false);
+
+    if(!hlag_entry) {
+        VLOG_WARN("non-existing LAG, LAG_ID=%d", lagid);
+        return -1;
+    }
+
+    attr[0].id = SAI_LAG_MEMBER_ATTR_LAG_ID;
+    attr[0].value.oid = hlag_entry->handle.data;
+
+    attr[1].id = SAI_LAG_MEMBER_ATTR_PORT_ID;
+    attr[1].value.oid = ops_sai_api_hw_id2port_id(hw_id);
+
+    status = sai_api->lag_api->create_lag_member(&hlag_member_entry.handle.data, sizeof(attr)/sizeof(attr[0]), attr);
+
+    SAI_ERROR_LOG_EXIT(status, "Failed to add port");
+
+    hlag_member_entry.hw_id = hw_id;
+
+    __lag_member_hmap_add(&hlag_entry->hmap_member_ports,&hlag_member_entry);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
+/*
+ * Removes member port from lag.
+ */
+int
+__lag_member_port_del(int        lagid,
+                            uint32_t   hw_id)
+{
+    sai_status_t                    status      = SAI_STATUS_SUCCESS;
+    struct hlag_entry               *hlag_entry = NULL;
+    struct hlag_member_entry        *hlag_member_entry = NULL;
+    const struct ops_sai_api_class  *sai_api    = ops_sai_api_get_instance();
+    sai_attribute_t                 attr[2];
+
+    VLOG_INFO("Removes member port from lag. hw_port=%d, tid=%d",
+               hw_id, lagid);
+
+    memset(attr,0,sizeof(sai_attribute_t) * 2);
+
+    hlag_entry = __lag_entry_hmap_find_create(&all_lag, lagid, false);
+
+    if(!hlag_entry) {
+        VLOG_WARN("non-existing LAG, LAG_ID=%d", lagid);
+        return -1;
+    }
+
+    hlag_member_entry = __lag_member_hmap_find(&hlag_entry->hmap_member_ports,hw_id);
+    if(!hlag_member_entry) {
+        return 0;
+    }
+
+    status = sai_api->lag_api->remove_lag_member(hlag_member_entry->handle.data);
+
+    SAI_ERROR_LOG_EXIT(status, "Failed to del port");
+
+    __lag_member_hmap_del(&hlag_entry->hmap_member_ports,hlag_member_entry);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
+/*
+ * Set traffic distribution to this port as part of LAG.
+ */
+int
+__lag_set_tx_enable(int        lagid,
+                        uint32_t   hw_id,
+                        bool       enable)
+{
+    sai_status_t                    status      = SAI_STATUS_SUCCESS;
+    struct hlag_entry               *hlag_entry = NULL;
+    struct hlag_member_entry        *hlag_member_entry = NULL;
+    const struct ops_sai_api_class  *sai_api    = ops_sai_api_get_instance();
+    sai_attribute_t                 attr;
+
+    VLOG_INFO("Set traffic distribution to this port as part of LAG. hw_port=%d, tid=%d, enable = %d",
+               hw_id, lagid, enable);
+
+    memset(&attr,0,sizeof(sai_attribute_t));
+
+    hlag_entry = __lag_entry_hmap_find_create(&all_lag, lagid, false);
+
+    if(!hlag_entry) {
+        VLOG_WARN("non-existing LAG, LAG_ID=%d", lagid);
+        return -1;
+    }
+
+    hlag_member_entry = __lag_member_hmap_find(&hlag_entry->hmap_member_ports,hw_id);
+    if(!hlag_member_entry) {
+        return -1;
+    }
 
     attr.id = SAI_LAG_MEMBER_ATTR_EGRESS_DISABLE;
 
@@ -169,195 +375,57 @@ __ops_sai_lag_egress_enable_port(int lag_id, int hw_port, int enable)
         attr.value.booldata = true;
     }
 
-    sai_lag_number_id = ops_sai_api_hw_id2sai_lag_member_id(hw_port);
-
-    status = sai_api->lag_api->set_lag_member_attribute(sai_lag_number_id,&attr);
+    status = sai_api->lag_api->set_lag_member_attribute(hlag_member_entry->handle.data, &attr);
 
     SAI_ERROR_LOG_EXIT(status, "Failed to egress enable port to lag");
 
-    VLOG_DBG("Done.");
-
-    return 0;
 exit:
-    return 0;
+    return SAI_ERROR_2_ERRNO(status);
 }
 
-
-//////////////////////////////// Public API //////////////////////////////
+/*
+ * Set balance mode from lag.
+ */
 int
-ops_sai_lag_create(int *lag_idp)
+__lag_set_balance_mode(int   lagid,
+                              int   balance_mode)
 {
-    sai_status_t        status      = SAI_STATUS_SUCCESS;
-    sai_object_id_t     sai_lag_id  = 0;
-    ops_sai_lag_data_t *lagp        = NULL;
-    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-
-    VLOG_DBG("entry: lag_id=%d", *lag_idp);
-
-    lagp = __get_lag_data(*lag_idp);
-    if (!lagp) {
-        VLOG_ERR("Failed to get LAG data for LAGID %d", *lag_idp);
-        return -1;
-    }
-
-    if (lagp->hw_created) {
-        VLOG_WARN("Duplicated LAG creation request, LAGID=%d",
-                  *lag_idp);
-        return -1;
-    }
-
-    status = sai_api->lag_api->create_lag(&sai_lag_id, 0, NULL);
-
-    SAI_ERROR_LOG_EXIT(status, "Failed to create lag");
-
-    lagp->hw_created    = 1;
-    lagp->lag_id        = ops_sai_api_sai_lag_id2lag_id(sai_lag_id);
-
-    *lag_idp = ops_sai_api_sai_lag_id2lag_id(sai_lag_id);
-
-    VLOG_DBG("Done");
-    return SAI_ERROR_2_ERRNO(status);
-exit:
-    __free_lag_data(lagp);
-    return SAI_ERROR_2_ERRNO(status);
+    (void)lagid;
+    (void)balance_mode;
+    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+    return 0;
 }
 
 int
-ops_sai_lag_destroy(int lag_id)
+__lag_get_handle_id(int         lagid,
+                         handle_t   *handle_id)
 {
-    sai_status_t        status      = SAI_STATUS_SUCCESS;
-    sai_object_id_t     sai_lag_id  = 0;
-    ops_sai_lag_data_t  *lagp       = NULL;
-    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+    struct hlag_entry               *hlag_entry = NULL;
 
-    lagp = __find_lag_data(lag_id);
-    if (lagp) {
-        sai_lag_id = (((sai_object_id_t)(SAI_OBJECT_TYPE_LAG)<<32 )| (sai_object_id_t)lag_id);;
-        status = sai_api->lag_api->remove_lag(sai_lag_id);
+    VLOG_INFO("ops_sai_api_lagid2handle_id. tid=%d",lagid);
 
-        __free_lag_data(lagp);
-    } else {
-        VLOG_WARN("Deleting non-existing LAG, LAG_ID=%d", lag_id);
+    hlag_entry = __lag_entry_hmap_find_create(&all_lag, lagid, false);
+
+    if(!hlag_entry) {
+        VLOG_WARN("non-existing LAG, LAG_ID=%d", lagid);
+        return -1;
     }
 
-    VLOG_DBG("Done");
+    *handle_id = hlag_entry->handle;
 
-    return SAI_ERROR_2_ERRNO(status);
+    return 0;
 }
-#if 0
-void
-ops_sai_lag_attach_ports(int lag_id, unsigned long *pbm)
-{
-    int                 index = 0;
-    ops_sai_lag_data_t  *lagp;
-    int                 hw_port;
 
-    (void)hw_port;
+DEFINE_GENERIC_CLASS(struct lag_class, lag) = {
+        .init            = __lag_init,
+        .create          = __lag_create,
+        .remove          = __lag_remove,
+        .member_port_add = __lag_member_port_add,
+        .member_port_del = __lag_member_port_del,
+        .set_tx_enable   = __lag_set_tx_enable,
+        .set_balance_mode= __lag_set_balance_mode,
+        .get_handle_id   = __lag_get_handle_id,
+        .deinit          = __lag_deinit,
+};
 
-    VLOG_DBG("entry: lag_id=%d", lag_id);
-
-    lagp = __get_lag_data(lag_id);
-    if (!lagp) {
-        VLOG_ERR("Failed to get LAG data for LAGID %d", lag_id);
-        return;
-    }
-
-    if (!lagp->hw_created) {
-        VLOG_WARN("Error LAGID=%d not created in hardware", lag_id);
-        return;
-    }
-
-    /* Detach removed member ports. */
-    for(index = 0; index < SAI_PORTS_MAX; index++)
-    {
-        if(!bitmap_is_set(pbm,index) && bitmap_is_set(lagp->pbmp_ports,index))
-        {
-            __ops_sai_lag_detach_port(lagp->lag_id,index);
-            bitmap_set0(lagp->pbmp_ports,index);
-        }
-    }
-
-    /* Attach current list of member ports. */
-    for(index = 0; index < SAI_PORTS_MAX; index++)
-    {
-        if(bitmap_is_set(pbm,index) && !bitmap_is_set(lagp->pbmp_ports,index))
-        {
-            __ops_sai_lag_attach_port(lagp->lag_id,index);
-            bitmap_set1(lagp->pbmp_ports,index);
-        }
-    }
-
-    VLOG_DBG("done");
-} // ops_sai_lag_attach_ports
-
-void
-ops_sai_lag_egress_enable_ports(int lag_id, unsigned long *pbm)
-{
-    int                 index = 0;
-    ops_sai_lag_data_t  *lagp;
-    int                 hw_port;
-
-    VLOG_DBG("entry: lag_id=%d", lag_id);
-
-    lagp = __get_lag_data(lag_id);
-    if (!lagp) {
-        VLOG_ERR("Failed to get LAG data for LAGID %d", lag_id);
-        return;
-    }
-
-    if (!lagp->hw_created) {
-        VLOG_WARN("Error LAGID=%d not created in hardware", lag_id);
-        return;
-    }
-
-    /* Disable egress for removed member ports. */
-    for(index = 0; index < SAI_PORTS_MAX; index++)
-    {
-        if(!bitmap_is_set(pbm,index) && bitmap_is_set(lagp->pbmp_egr_en,index))
-        {
-            __ops_sai_lag_egress_enable_port(lagp->lag_id,index,false);
-            bitmap_set0(lagp->pbmp_egr_en,index);
-        }
-    }
-
-    /* Enable egress for the current list of member ports. */
-    for(index = 0; index < SAI_PORTS_MAX; index++)
-    {
-        if(bitmap_is_set(pbm,index) && !bitmap_is_set(lagp->pbmp_egr_en,index))
-        {
-            __ops_sai_lag_egress_enable_port(lagp->lag_id,index,true);
-            bitmap_set1(lagp->pbmp_egr_en,index);
-        }
-    }
-
-    VLOG_DBG("done");
-} // ops_sai_lag_egress_enable_ports
-
-void
-ops_sai_lag_set_balance_mode(int lag_id, int lag_mode)
-{
-    int                 index = 0;
-    ops_sai_lag_data_t  *lagp;
-    int                 hw_port;
-
-    VLOG_DBG("entry: lag_id=%d", lag_id);
-
-    lagp = __get_lag_data(lag_id);
-    if (!lagp) {
-        VLOG_ERR("Failed to get LAG data for LAGID %d", lag_id);
-        return;
-    }
-
-    if (!lagp->hw_created) {
-        VLOG_WARN("Error LAGID=%d not created in hardware", lag_id);
-        return;
-    }
-
-    if (lagp->lag_mode != lag_mode) {
-        //hw_set_lag_balance_mode(unit, lag_id, lag_mode);
-        lagp->lag_mode = lag_mode;
-    }
-
-    VLOG_DBG("done");
-} // ops_sai_lag_set_balance_mode
-#endif
+DEFINE_GENERIC_CLASS_GETTER(struct lag_class, lag);

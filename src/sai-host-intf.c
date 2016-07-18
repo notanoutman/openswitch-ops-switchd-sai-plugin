@@ -41,6 +41,7 @@ struct hif_entry {
     char name[IFNAMSIZ];
     enum host_intf_type type;
     handle_t handle;
+    handle_t hostif_id;
     struct eth_addr mac;
 };
 
@@ -279,37 +280,6 @@ __sai_host_intf_entry_hmap_del(struct hmap *hif_hmap, const char *name)
 }
 
 /*
- * Remove L2 port netdev.
- *
- * @param[in] name    - netdev name.
- *
- * @return 0 operation completed successfully
- * @return errno operation failed
- */
-static int
-__sai_remove_netdev(const char *name )
-{
-    int err = 0;
-    char command[SAI_COMMAND_MAX_SIZE] = { };
-
-    NULL_PARAM_LOG_ABORT(name);
-
-    VLOG_INFO("Removing host interface (name: %s, type: L2 port)",
-              name);
-
-    snprintf(command, sizeof(command), "ip link del dev %s", name);
-
-    VLOG_DBG("Executing command (command: %s)", command);
-    /* Error code is returned in the least significant byte */
-    err = 0xff & system(command);
-    ERRNO_LOG_EXIT(err , "Failed to execute command (command: %s)",
-                   command);
-
-exit:
-    return err;
-}
-
-/*
  * Creates Linux netdev for specified interface.
  *
  * @param[in] name   - netdev name.
@@ -327,9 +297,7 @@ __host_intf_netdev_create(const char *name,
                           const struct eth_addr *mac)
 {
     SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-    char command[SAI_COMMAND_MAX_SIZE] = { };
 
-//    int err = 0;
     struct hif_entry hif = { };
 
     switch (type) {
@@ -362,16 +330,9 @@ __host_intf_netdev_create(const char *name,
                                                         ARRAY_SIZE(hostif_attrib),
                                                         hostif_attrib);
 
-    snprintf(command, sizeof(command),
-            "ip link set dev %s address %02x:%02x:%02x:%02x:%02x:%02x",
-             name, mac->ea[0], mac->ea[1],
-             mac->ea[2], mac->ea[3],
-             mac->ea[4], mac->ea[5]);
-
-
-    //err = system(command);
     strncpy(hif.name, name, sizeof(hif.name));
     hif.type = type;
+    hif.hostif_id.data = hif_id_port;
     memcpy(&hif.handle, handle, sizeof(hif.handle));
     memcpy(&hif.mac, mac, sizeof(hif.mac));
 
@@ -392,6 +353,9 @@ static int
 __host_intf_netdev_remove(const char *name)
 {
     SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+
+    __sai_host_intf_entry_hmap_del(&sai_host_intf, name);
+
     return 0;
 }
 

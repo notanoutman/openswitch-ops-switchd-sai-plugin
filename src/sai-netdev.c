@@ -210,45 +210,6 @@ netdev_sai_hw_id_get(struct netdev *netdev_)
     return netdev->hw_id;
 }
 
-static struct netdev_sai *
-__netdev_sai_get_netdev_by_name(const char *name)
-{
-    struct netdev_sai *netdev = NULL;
-    bool found = false;
-
-    ovs_mutex_lock(&sai_netdev_list_mutex);
-    LIST_FOR_EACH(netdev, list_node, &sai_netdev_list) {
-        if (strcmp(netdev->up.name, name) == 0) {
-            found = true;
-            break;
-        }
-    }
-    ovs_mutex_unlock(&sai_netdev_list_mutex);
-
-    return (found == true) ? netdev : NULL;
-}
-
-uint32_t
-netdev_sai_get_hw_id_by_name(const char *name, int *hw_id)
-{
-    struct netdev_sai *netdev = NULL;
-
-    if (!name || !hw_id) {
-        return false;
-    }
-
-    netdev = __netdev_sai_get_netdev_by_name(name);
-
-    if (netdev) {
-        *hw_id = netdev->hw_id;
-        return true;
-    }
-    else {
-        return false;
-    }
-}
-
-
 /**
  * Notifies openswitch when port state chenges.
  * @param[in] oid - port object id.
@@ -806,15 +767,33 @@ __update_flags_loopback(struct netdev *netdev_,
     return 0;
 }
 
-void
-netdev_sai_get_port_name_by_hw_id(handle_t port_id,
-                        char *str)
+static struct netdev_sai *
+__netdev_sai_get_netdev_by_name(const char *name)
+{
+    struct netdev_sai *netdev = NULL;
+    bool found = false;
+
+    ovs_mutex_lock(&sai_netdev_list_mutex);
+    LIST_FOR_EACH(netdev, list_node, &sai_netdev_list) {
+        if (strcmp(netdev->up.name, name) == 0) {
+            found = true;
+            break;
+        }
+    }
+    ovs_mutex_unlock(&sai_netdev_list_mutex);
+
+    return (found == true) ? netdev : NULL;
+}
+
+int
+netdev_sai_get_port_name_by_handle_id(handle_t    port_id,
+                                                char        *str)
 {
     struct netdev_sai *dev = NULL, *next_dev = NULL;
     int32_t     found = 0;
 
     if (!str) {
-        return;
+        return -1;
     }
 
     LIST_FOR_EACH_SAFE(dev, next_dev, list_node, &sai_netdev_list) {
@@ -827,5 +806,28 @@ netdev_sai_get_port_name_by_hw_id(handle_t port_id,
 
     if (dev && found) {
         strcpy(str, dev->up.name);
+        return 0;
+    }
+
+    return -1;
+}
+
+int
+netdev_sai_get_hw_id_by_name(const char *name, int *hw_id)
+{
+    struct netdev_sai *netdev = NULL;
+
+    if (!name || !hw_id) {
+        return false;
+    }
+
+    netdev = __netdev_sai_get_netdev_by_name(name);
+
+    if (netdev) {
+        *hw_id = netdev->hw_id;
+        return true;
+    }
+    else {
+        return false;
     }
 }

@@ -81,7 +81,7 @@ ops_sai_api_init(void)
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI switch api");
 
 
-    status = sai_api.switch_api->initialize_switch(0, "SX", "/etc/spec/e582.txt", &sai_events);
+    status = sai_api.switch_api->initialize_switch(0, "SX", "/etc/spec/spec.txt", &sai_events);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize switch");
 
     status = sai_api_query(SAI_API_PORT, (void **) &sai_api.port_api);
@@ -104,15 +104,15 @@ ops_sai_api_init(void)
 
     status = sai_api_query(SAI_API_STP,
                            (void **) &sai_api.stp_api);
-    SAI_ERROR_LOG_EXIT(status, "Failed to initialize Stp api");
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI Stp api");
 
     status = sai_api_query(SAI_API_LAG,
                            (void **) &sai_api.lag_api);
-    SAI_ERROR_LOG_EXIT(status, "Failed to initialize LAG api");
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI LAG api");
 
     status = sai_api_query(SAI_API_FDB,
                            (void **) &sai_api.fdb_api);
-    SAI_ERROR_LOG_EXIT(status, "Failed to initialize FDB api");
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI FDB api");
 
 //    status = __init_ports();
     SAI_ERROR_LOG_EXIT(status, "Failed to create interfaces");
@@ -184,7 +184,7 @@ ops_sai_api_base_mac_get(struct eth_addr *mac)
  * Return value requested by SAI using string key.
  */
 #define SAI_KEY_INIT_CONFIG_FILE "SAI_KEY_INIT_CONFIG_FILE"
-#define SAI_KEY_INIT_CONFIG_FILE_PATH "/etc/spec/e582.txt"
+#define SAI_KEY_INIT_CONFIG_FILE_PATH "/etc/spec/spec.txt"
 static const char *
 __profile_get_value(sai_switch_profile_id_t profile_id, const char *variable)
 {
