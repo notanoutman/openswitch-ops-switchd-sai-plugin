@@ -19,5 +19,5 @@ int netdev_sai_set_router_intf_handle(struct netdev *, const handle_t *);
 
 void netdev_sai_get_port_name_by_handle_id(handle_t,char *);
 bool netdev_sai_get_hw_id_by_name(const char *, uint32_t *);
-
+int  netdev_sai_get_etheraddr(const struct netdev *netdev, struct eth_addr *mac);
 #endif /* sai-netdev.h */

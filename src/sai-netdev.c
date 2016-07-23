@@ -210,6 +210,25 @@ netdev_sai_hw_id_get(struct netdev *netdev_)
     return netdev->hw_id;
 }
 
+int
+netdev_sai_get_etheraddr(const struct netdev *netdev,
+                         struct eth_addr *mac)
+{
+    struct netdev_sai *dev = __netdev_sai_cast(netdev);
+
+    SAI_API_TRACE_FN();
+
+    ovs_mutex_lock(&dev->mutex);
+    if (!dev->is_port_initialized) {
+        goto exit;
+    }
+
+    memcpy(mac, &dev->mac_addr, sizeof (*mac));
+
+exit:
+    ovs_mutex_unlock(&dev->mutex);
+    return 0;
+}
 /**
  * Notifies openswitch when port state chenges.
  * @param[in] oid - port object id.

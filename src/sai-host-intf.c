@@ -280,6 +280,37 @@ __sai_host_intf_entry_hmap_del(struct hmap *hif_hmap, const char *name)
 }
 
 /*
+ * Remove L2 port netdev.
+ *
+ * @param[in] name    - netdev name.
+ *
+ * @return 0 operation completed successfully
+ * @return errno operation failed
+ */
+static int
+__sai_remove_netdev(const char *name )
+{
+    int err = 0;
+    char command[SAI_COMMAND_MAX_SIZE] = { };
+
+    NULL_PARAM_LOG_ABORT(name);
+
+    VLOG_INFO("Removing host interface (name: %s, type: L2 port)",
+              name);
+
+    snprintf(command, sizeof(command), "ip link del dev %s", name);
+
+    VLOG_DBG("Executing command (command: %s)", command);
+    /* Error code is returned in the least significant byte */
+    err = 0xff & system(command);
+    ERRNO_LOG_EXIT(err , "Failed to execute command (command: %s)",
+                   command);
+
+exit:
+    return err;
+}
+
+/*
  * Creates Linux netdev for specified interface.
  *
  * @param[in] name   - netdev name.
@@ -296,9 +327,13 @@ __host_intf_netdev_create(const char *name,
                           const handle_t *handle,
                           const struct eth_addr *mac)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-
     struct hif_entry hif = { };
+    struct hif_entry *p_hif = NULL;
+
+    p_hif = __sai_host_intf_entry_hmap_find(&sai_host_intf, name);
+    if (NULL !=  p_hif) {
+        return 0;
+    }
 
     switch (type) {
     case HOST_INTF_TYPE_L2_PORT_NETDEV:
@@ -330,6 +365,8 @@ __host_intf_netdev_create(const char *name,
                                                         ARRAY_SIZE(hostif_attrib),
                                                         hostif_attrib);
 
+    SAI_ERROR_LOG_EXIT(status, "Failed to create host interface");
+
     strncpy(hif.name, name, sizeof(hif.name));
     hif.type = type;
     hif.hostif_id.data = hif_id_port;
@@ -338,6 +375,7 @@ __host_intf_netdev_create(const char *name,
 
     __sai_host_intf_entry_hmap_add(&sai_host_intf, &hif);
 
+exit:
     return status;
 }
 
@@ -353,8 +391,7 @@ static int
 __host_intf_netdev_remove(const char *name)
 {
     SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-
-    __sai_host_intf_entry_hmap_del(&sai_host_intf, name);
+     __sai_host_intf_entry_hmap_del(&sai_host_intf, name);
 
     return 0;
 }

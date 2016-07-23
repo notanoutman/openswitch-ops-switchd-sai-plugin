@@ -6,7 +6,8 @@
 
 //#include <sai-vendor-util.h>
 #include <sai-log.h>
-
+#include <stdlib.h>
+#include <string.h>
 //#include <packets.h>
 //#include <socket-util.h>
 //#include <netinet/in.h>
@@ -23,14 +24,20 @@ VLOG_DEFINE_THIS_MODULE(centec_sai_util);
 sai_status_t
 ops_sai_vendor_base_mac_get(sai_mac_t mac)
 {
-	sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    static sai_mac_t    _mac_addr = {0};
 
-	mac[0] = 0x11;
-	mac[1] = 0x22;
-	mac[2] = 0x33;
-	mac[3] = 0x44;
-	mac[4] = 0x55;
-	mac[5] = 0x66;
+    if(0x0 == _mac_addr[1])
+    {
+        _mac_addr[0] = 0x00;
+        _mac_addr[1] = 0x01;
+        _mac_addr[2] = 0x02;
+        _mac_addr[3] = rand() % 0xFF;
+        _mac_addr[4] = rand() % 0xFF;
+        _mac_addr[5] = rand() % 0xFF;
+    }
 
-	return status;
+    memcpy(mac,_mac_addr,sizeof(_mac_addr));
+
+    return status;
 }

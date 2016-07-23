@@ -114,8 +114,38 @@ ops_sai_api_init(void)
                            (void **) &sai_api.fdb_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI FDB api");
 
+    status = sai_api_query(SAI_API_ROUTER_INTERFACE,
+                           (void **) &sai_api.rif_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI router interface api");
+
+    status = sai_api_query(SAI_API_ROUTE,
+                           (void **) &sai_api.route_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI route api");
+
+    status = sai_api_query(SAI_API_NEIGHBOR,
+                           (void **) &sai_api.neighbor_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI neighbor api");
+
+    status = sai_api_query(SAI_API_NEXT_HOP,
+                           (void **) &sai_api.nexthop_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI nexthop api");
+
+    status = sai_api_query(SAI_API_NEXT_HOP_GROUP,
+                           (void **) &sai_api.nhg_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI nexthop group api");
+
+    status = sai_api_query(SAI_API_VIRTUAL_ROUTER,
+                           (void **) &sai_api.router_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI virtual router api");
+
 //    status = __init_ports();
     SAI_ERROR_LOG_EXIT(status, "Failed to create interfaces");
+
+    sai_attribute_t attr[1];
+
+    attr[0].id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
+    memcpy(attr[0].value.mac, sai_api_mac.ea, sizeof(sai_mac_t));
+    sai_api.switch_api->set_switch_attribute(attr);
 
     sai_api.initialized = true;
 

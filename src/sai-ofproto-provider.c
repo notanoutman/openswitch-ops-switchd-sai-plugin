@@ -19,7 +19,7 @@
 
 #include <vswitch-idl.h>
 #include <openswitch-idl.h>
-
+#include <sai-vendor.h>
 #include <sai-common.h>
 #include <sai-netdev.h>
 #include <sai-api-class.h>
@@ -37,7 +37,7 @@
 #include <sai-lag.h>
 #include <sai-fdb.h>
 #include "asic-plugin.h"
-
+#include <netinet/ether.h>
 #include "bridge.h"
 
 #define SAI_INTERFACE_TYPE_SYSTEM "system"
@@ -1370,6 +1370,31 @@ exit:
     return status;
 }
 
+static int
+__ofbundle_intf_mac_reconfigure(struct ofport_sai *port, bool is_create)
+{
+    int         status = 0;
+    char        sys_cmd[256];
+    char        *mac_addr = NULL;
+    struct      eth_addr mac;
+    const struct    ether_addr *p_mac = (void *)mac.ea;
+
+    memset(sys_cmd, 0, sizeof(sys_cmd));
+    if (!is_create) {
+        netdev_sai_get_etheraddr(port->up.netdev, &mac);
+    } else {
+        ops_sai_vendor_base_mac_get(mac.ea);
+    }
+
+    mac_addr = ether_ntoa(p_mac);
+    snprintf(sys_cmd, sizeof(sys_cmd), "ip netns exec swns ip link set address %s dev %s",
+            mac_addr, port->up.netdev->name);
+
+    system(sys_cmd);
+
+    return status;
+}
+
 /*
  * Reconfigures router interface.
  *
@@ -1439,6 +1464,7 @@ __ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
         LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
             status = netdev_sai_set_router_intf_handle(port->up.netdev,
                                                        &bundle->router_intf.rifid);
+            __ofbundle_intf_mac_reconfigure(port, true);
             ERRNO_EXIT(status);
         }
     }
@@ -1489,6 +1515,7 @@ static int __ofbundle_router_intf_remove(struct ofbundle_sai *bundle)
 
     if (bundle->router_intf.created) {
         LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+            __ofbundle_intf_mac_reconfigure(port, false);
             status = netdev_sai_set_router_intf_handle(port->up.netdev,
                                                        NULL);
             ERRNO_EXIT(status);

@@ -6,6 +6,7 @@
 
 #include <sai-log.h>
 #include <sai-router.h>
+#include <sai-api-class.h>
 
 VLOG_DEFINE_THIS_MODULE(sai_router);
 
@@ -29,10 +30,27 @@ __router_init(void)
 static int
 __router_create(handle_t *handle)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-    return 0;
-}
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_attribute_t attr[3];
+    sai_object_id_t routerid = 55;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
+    memset(attr, 0, sizeof(attr));
+    attr[0].id = SAI_VIRTUAL_ROUTER_ATTR_ADMIN_V4_STATE;
+    attr[0].value.booldata = 1;
+    attr[1].id = SAI_VIRTUAL_ROUTER_ATTR_ADMIN_V6_STATE;
+    attr[1].value.booldata = 0;
+    attr[2].id = SAI_VIRTUAL_ROUTER_ATTR_VIOLATION_TTL1_ACTION;
+    attr[2].value.s32 = SAI_PACKET_ACTION_TRAP;
+    status = sai_api->router_api->create_virtual_router(&routerid, 3, attr);
+
+    SAI_ERROR_LOG_EXIT(status, "Failed to create virtual router");
+    handle->data = routerid;
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+
+}
 /*
  * Removes virtual router.
  *

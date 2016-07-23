@@ -12,6 +12,10 @@
 #include <sai-vendor-common.h>
 #endif /* SAI_VENDOR */
 
+#include <hmap.h>
+#include <hash.h>
+#include <netdev.h>
+
 struct route_class {
     /**
     * Initializes route.
@@ -99,6 +103,38 @@ DECLARE_GENERIC_CLASS_GETTER(struct route_class, route);
 #define ops_sai_route_class ops_sai_route_class_generic
 #endif
 
+enum ops_route_state {
+    OPS_ROUTE_STATE_NON_ECMP = 0,
+    OPS_ROUTE_STATE_ECMP
+};
+
+struct nh_entry {
+    struct hmap_node nh_hmap_node;
+    uint32_t ref;
+    bool is_ipv6_addr;
+    char *id;
+    handle_t handle;
+};
+
+typedef struct sai_ops_route_s
+{
+    struct      hmap_node node;
+    int         vrf;
+    bool        is_ipv6;                   /* IP V4/V6 */
+    char        *prefix;
+    struct      hmap nexthops;              /* list of selected next hops */
+    uint8_t     n_nexthops;                 /* number of nexthops */
+    enum        ops_route_state rstate;     /* state of route */
+    handle_t    nh_ecmp;                   /* next hop index ecmp*/
+}sai_ops_route_t;
+
+typedef struct sai_ops_nexthop_s
+{
+    struct      hmap_node node;             /* route->nexthops */
+    char        *id;                        /* IP address or Port name */
+}sai_ops_nexthop_t;
+
+
 static inline void
 ops_sai_route_init(void)
 {
@@ -158,5 +194,20 @@ ops_sai_route_deinit(void)
     ovs_assert(ops_sai_route_class()->deinit);
     ops_sai_route_class()->deinit();
 }
+
+struct nh_entry*
+ops_sai_neighbor_get_nexthop(const char* id);
+
+struct nh_entry*
+ops_sai_neighbor_add_nexthop(const char* id, handle_t *l3_egress_id);
+
+int
+ops_sai_neighbor_delete_nexthop(const char* id);
+
+int32_t
+ops_sai_routing_nexthop_create(const handle_t *rif, const char* prefix, handle_t *l3_egress_id);
+
+int32_t
+ops_sai_routing_nexthop_remove(handle_t *l3_egress_id);
 
 #endif /* sai-route.h */

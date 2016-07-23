@@ -27,6 +27,12 @@ struct ops_sai_api_class {
     sai_lag_api_t *lag_api;
     sai_fdb_api_t *fdb_api;
     int32_t initialized;
+    sai_router_interface_api_t  *rif_api;
+    sai_route_api_t             *route_api;
+    sai_next_hop_api_t          *nexthop_api;
+    sai_next_hop_group_api_t    *nhg_api;
+    sai_neighbor_api_t          *neighbor_api;
+    sai_virtual_router_api_t    *router_api;
 };
 
 void ops_sai_api_init(void);

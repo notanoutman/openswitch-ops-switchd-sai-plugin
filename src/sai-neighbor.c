@@ -7,6 +7,10 @@
 #include <sai-log.h>
 #include <sai-neighbor.h>
 #include <sai-common.h>
+#include <sai-api-class.h>
+#include <sai-route.h>
+#include <arpa/inet.h>
+#include <netinet/ether.h>
 
 VLOG_DEFINE_THIS_MODULE(sai_neighbor);
 
@@ -35,8 +39,65 @@ __neighbor_create(bool           is_ipv6_addr,
                   const char     *mac_addr,
                   const handle_t *rif)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-    return 0;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+    sai_status_t            status      = SAI_STATUS_SUCCESS;
+    struct nh_entry         *p_nh_entry = NULL;
+    sai_neighbor_entry_t    sai_neighbor;
+    sai_attribute_t         attr[1];
+    char                    buf[64];
+    int                     retv;
+    int                     rc;
+    uint32_t                ip_prefix;
+    handle_t                l3_egress_id;
+
+    if (NULL == mac_addr || NULL == ip_addr) {
+        return SAI_STATUS_FAILURE;
+    }
+
+    memset(&sai_neighbor, 0 , sizeof(sai_neighbor));
+    memset(&ip_prefix, 0, sizeof(ip_prefix));
+    memset(buf, 0, sizeof(buf));
+    retv = inet_pton(AF_INET, ip_addr, buf);
+    if (!retv) {
+        return SAI_STATUS_INVALID_PARAMETER;
+    }
+
+    memcpy(&ip_prefix, buf, sizeof(ip_prefix));
+
+    memset(attr, 0, sizeof(attr));
+    attr[0].id = SAI_NEIGHBOR_ATTR_DST_MAC_ADDRESS;
+
+    struct ether_addr *ether_mac = ether_aton(mac_addr);
+    memcpy(attr[0].value.mac, ether_mac, sizeof(attr[0].value.mac));
+    sai_neighbor.rif_id = rif->data;
+    if (!is_ipv6_addr)
+    {
+        sai_neighbor.ip_address.addr_family = SAI_IP_ADDR_FAMILY_IPV4;
+        sai_neighbor.ip_address.addr.ip4 = htonl(ip_prefix);
+    }
+    else
+    {
+        /* TO SUPPORT */
+    }
+
+    p_nh_entry = ops_sai_neighbor_get_nexthop(ip_addr);
+    if (NULL == p_nh_entry) {
+        rc = ops_sai_routing_nexthop_create(rif, ip_addr, &l3_egress_id);
+        if (rc) {
+            goto exit;
+        }
+    }
+    else {
+        l3_egress_id.data = p_nh_entry->handle.data;
+    }
+
+    ops_sai_neighbor_add_nexthop(ip_addr, &l3_egress_id);
+
+    status = sai_api->neighbor_api->create_neighbor_entry(&sai_neighbor, 1, attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to create host entry");
+
+exit:
+    return SAI_STATUS_SUCCESS;
 }
 
 /*
@@ -51,8 +112,48 @@ __neighbor_create(bool           is_ipv6_addr,
 static int
 __neighbor_remove(bool is_ipv6_addr, const char *ip_addr, const handle_t *rif)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-    return 0;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+    sai_status_t        status      = SAI_STATUS_SUCCESS;
+    struct nh_entry     *p_nh_entry = NULL;
+    sai_neighbor_entry_t neighbor;
+    char                buf[64];
+    int                 retv    = 0;
+    int                 rc      = 0;
+    uint32_t            ip_prefix;
+    handle_t            l3_egress_id;
+
+    if (NULL == ip_addr) {
+        return SAI_STATUS_FAILURE;
+    }
+
+    memset(&neighbor, 0, sizeof(neighbor));
+    memset(&ip_prefix, 0, sizeof(ip_prefix));
+    memset(buf, 0, sizeof(buf));
+    retv = inet_pton(AF_INET, ip_addr, buf);
+    if (!retv) {
+        return SAI_STATUS_INVALID_PARAMETER;
+    }
+
+    memcpy(&ip_prefix, buf, sizeof(ip_prefix));
+
+    neighbor.rif_id = rif->data;
+    neighbor.ip_address.addr_family = SAI_IP_ADDR_FAMILY_IPV4;
+    neighbor.ip_address.addr.ip4 = htonl(ip_prefix);
+
+    status = sai_api->neighbor_api->remove_neighbor_entry(&neighbor);
+    SAI_ERROR_LOG_EXIT(status, "Failed to remove host entry");
+
+    p_nh_entry = ops_sai_neighbor_get_nexthop(ip_addr);
+    if (NULL != p_nh_entry) {
+        l3_egress_id.data = p_nh_entry->handle.data;
+        rc = ops_sai_neighbor_delete_nexthop(ip_addr);
+        if (!rc) {
+            rc = ops_sai_routing_nexthop_remove(&l3_egress_id);
+        }
+    }
+
+exit:
+    return status;
 }
 
 /*
