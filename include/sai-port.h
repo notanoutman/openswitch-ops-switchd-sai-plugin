@@ -133,6 +133,10 @@ struct port_class {
      * @return SAI_STATUS_SUCCESS, sai specific error otherwise.
      */
     int (*stats_get)(uint32_t hw_id, struct netdev_stats *stats);
+
+    int (*ingress_filter_set)(uint32_t hw_id, bool enable);
+    int (*drop_tagged_set)(uint32_t hw_id, bool enable);
+    int (*drop_untagged_set)(uint32_t hw_id, bool enable);
     /*
      * De-initialize port functionality.
      */
@@ -166,6 +170,11 @@ int ops_sai_port_flags_update(uint32_t, enum netdev_flags, enum netdev_flags,
 int ops_sai_port_pvid_get(uint32_t, sai_vlan_id_t *);
 int ops_sai_port_pvid_set(uint32_t, sai_vlan_id_t);
 int ops_sai_port_stats_get(uint32_t, struct netdev_stats *);
+
+int ops_sai_port_ingress_filter_set(uint32_t, bool);
+int ops_sai_port_drop_tagged_set(uint32_t, bool);
+int ops_sai_port_drop_untagged_set(uint32_t, bool);
+
 void ops_sai_port_deinit(void);
 
 #endif /* sai-port.h */

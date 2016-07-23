@@ -117,16 +117,14 @@ sai_mac_learning_get_port_name_from_id(handle_t port_id, char* port_name)
 static int
 sai_mac_learning_get_id_from_port_name(char* port_name, handle_t *hand_id)
 {
-    int hw_id = 0;
+    uint32_t hw_id = 0;
 
-    if(!netdev_sai_get_hw_id_by_name(port_name, &hw_id))
-    {
+    if(true == netdev_sai_get_hw_id_by_name(port_name, &hw_id))  {
+	 VLOG_INFO("%s: hw_id = 0x%x ", __FUNCTION__, hw_id);
         hand_id->data = ops_sai_api_hw_id2port_id(hw_id);
         return 0;
-    }
-
-    if(!ofbundle_get_handle_id_by_port_name(port_name,hand_id))
-    {
+    } else if(true == ofbundle_get_handle_id_by_port_name(port_name,hand_id)) {
+        VLOG_INFO("%s: port_id: %lx ", __FUNCTION__,hand_id->data);
         return 0;
     }
 
@@ -396,7 +394,7 @@ sai_mac_learning_l2_addr_flush_handler(mac_flush_params_t *settings)
     if (settings->options == L2MAC_FLUSH_BY_PORT
         || settings->options == L2MAC_FLUSH_BY_PORT_VLAN) {
         rc = sai_mac_learning_get_id_from_port_name(settings->port_name, &id);
-        if (rc == false) {
+        if (rc) {
             VLOG_ERR_RL(&mac_learning_rl, "%s: %s name not found flags %u mode %d",
                         __FUNCTION__, settings->port_name,
                         settings->flags,

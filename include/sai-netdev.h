@@ -18,6 +18,6 @@ int netdev_sai_set_router_intf_handle(struct netdev *, const handle_t *);
 
 
 void netdev_sai_get_port_name_by_handle_id(handle_t,char *);
-bool netdev_sai_get_hw_id_by_name(const char *, int *);
+bool netdev_sai_get_hw_id_by_name(const char *, uint32_t *);
 
 #endif /* sai-netdev.h */

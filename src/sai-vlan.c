@@ -48,7 +48,21 @@ __vlan_deinit(void)
 int
 __vlan_access_port_add(sai_vlan_id_t vid, uint32_t hw_id)
 {
-    return __vlan_port_set(vid, hw_id, SAI_VLAN_PORT_UNTAGGED, true);
+    int status = 0;
+    status = __vlan_port_set(vid, hw_id, SAI_VLAN_PORT_UNTAGGED, true);
+    ERRNO_LOG_EXIT(status, "Failed to __vlan port set");
+
+    status = ops_sai_port_ingress_filter_set(hw_id, true);
+    ERRNO_LOG_EXIT(status, "Failed to set ingress filter");
+
+    status = ops_sai_port_drop_untagged_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set drop untagged");
+
+    status = ops_sai_port_drop_tagged_set(hw_id, true);
+    ERRNO_LOG_EXIT(status, "Failed to set drop tagged");
+
+exit:
+    return status;
 }
 
 /*
@@ -69,6 +83,15 @@ __vlan_access_port_del(sai_vlan_id_t vid, uint32_t hw_id)
     status = ops_sai_port_pvid_set(hw_id, OPS_SAI_PORT_DEFAULT_PVID);
     ERRNO_EXIT(status);
 
+    status = ops_sai_port_ingress_filter_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set ingress filter");
+
+    status = ops_sai_port_drop_untagged_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set drop untagged");
+
+    status = ops_sai_port_drop_tagged_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set drop tagged");
+
 exit:
     return status;
 }
@@ -82,7 +105,22 @@ exit:
 int
 __vlan_trunks_port_add(const unsigned long *trunks, uint32_t hw_id)
 {
-    return __trunks_port_set(trunks, hw_id, true);
+    int status = 0;
+
+    status = __trunks_port_set(trunks, hw_id, true);
+    ERRNO_LOG_EXIT(status, "Failed to __trunks port set true");
+
+    status = ops_sai_port_ingress_filter_set(hw_id, true);
+    ERRNO_LOG_EXIT(status, "Failed to set ingress filter");
+
+    status = ops_sai_port_drop_untagged_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set drop untagged");
+
+    status = ops_sai_port_drop_tagged_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set drop tagged");
+
+exit:
+    return status;
 }
 
 /*
@@ -94,7 +132,22 @@ __vlan_trunks_port_add(const unsigned long *trunks, uint32_t hw_id)
 int
 __vlan_trunks_port_del(const unsigned long *trunks, uint32_t hw_id)
 {
-    return __trunks_port_set(trunks, hw_id, false);
+    int status = 0;
+
+    status = __trunks_port_set(trunks, hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to __trunks port set false");
+
+    status = ops_sai_port_ingress_filter_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set ingress filter");
+
+    status = ops_sai_port_drop_untagged_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set drop untagged");
+
+    status = ops_sai_port_drop_tagged_set(hw_id, false);
+    ERRNO_LOG_EXIT(status, "Failed to set drop tagged");
+
+exit:
+    return status;
 }
 
 /*

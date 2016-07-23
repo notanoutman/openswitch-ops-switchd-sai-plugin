@@ -813,7 +813,7 @@ netdev_sai_get_port_name_by_handle_id(handle_t    port_id,
 }
 
 int
-netdev_sai_get_hw_id_by_name(const char *name, int *hw_id)
+netdev_sai_get_hw_id_by_name(const char *name, uint32_t *hw_id)
 {
     struct netdev_sai *netdev = NULL;
 

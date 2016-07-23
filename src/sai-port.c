@@ -562,6 +562,75 @@ exit:
     return SAI_ERROR_2_ERRNO(status);
 }
 
+int ops_sai_port_ingress_filter_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->ingress_filter_set);
+    return ops_sai_port_class()->ingress_filter_set(hw_id, enable);
+}
+
+int __port_ingress_filter_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_INGRESS_FILTERING;
+    attr.value.booldata = enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set ingress filter %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
+int ops_sai_port_drop_tagged_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->drop_tagged_set);
+    return ops_sai_port_class()->drop_tagged_set(hw_id, enable);
+}
+
+int __port_drop_tagged_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_DROP_TAGGED;
+    attr.value.booldata = enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set tagged %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
+int ops_sai_port_drop_untagged_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->drop_untagged_set);
+    return ops_sai_port_class()->drop_untagged_set(hw_id, enable);
+}
+
+int __port_drop_untagged_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_DROP_UNTAGGED;
+    attr.value.booldata = enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set untagged %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
 /*
  * Applies all supported port configuration except from hw_enable.
  *
@@ -659,6 +728,9 @@ DEFINE_GENERIC_CLASS(struct port_class, port) = {
         .pvid_get = __port_pvid_get,
         .pvid_set = __port_pvid_set,
         .stats_get = __port_stats_get,
+        .ingress_filter_set = __port_ingress_filter_set,
+        .drop_tagged_set    = __port_drop_tagged_set,
+        .drop_untagged_set  = __port_drop_untagged_set,
         .deinit = __port_deinit,
 };
 

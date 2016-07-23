@@ -398,7 +398,7 @@ __stp_set_port_state(char *port_name,
                          int  port_state,
                          bool port_stp_set)
 {
-    int hw_id = 0;
+    uint32_t hw_id = 0;
     int stp_id = stgid;
 
     VLOG_DBG("%s: entry, stg=%d, port_state=%d, port_stp_set=%d", __FUNCTION__, stgid,port_state,port_stp_set);
@@ -422,7 +422,7 @@ __stp_get_port_state(char *port_name,
                          int  stgid,
                          int  *port_state)
 {
-    int hw_id = 0;
+    uint32_t hw_id = 0;
     int stp_id = stgid;
 
     VLOG_DBG("%s: entry, stg=%d", __FUNCTION__, stgid);
