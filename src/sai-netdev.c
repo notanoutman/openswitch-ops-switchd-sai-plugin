@@ -713,9 +713,99 @@ __get_features(const struct netdev *netdev_, enum netdev_features *current,
                enum netdev_features *advertised,
                enum netdev_features *supported, enum netdev_features *peer)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
+#if 0
+    NETDEV_F_10MB_HD =    1 << 0,  /* 10 Mb half-duplex rate support. */
+    NETDEV_F_10MB_FD =    1 << 1,  /* 10 Mb full-duplex rate support. */
+    NETDEV_F_100MB_HD =   1 << 2,  /* 100 Mb half-duplex rate support. */
+    NETDEV_F_100MB_FD =   1 << 3,  /* 100 Mb full-duplex rate support. */
+    NETDEV_F_1GB_HD =     1 << 4,  /* 1 Gb half-duplex rate support. */
+    NETDEV_F_1GB_FD =     1 << 5,  /* 1 Gb full-duplex rate support. */
+    NETDEV_F_10GB_FD =    1 << 6,  /* 10 Gb full-duplex rate support. */
+    NETDEV_F_40GB_FD =    1 << 7,  /* 40 Gb full-duplex rate support. */
+    NETDEV_F_100GB_FD =   1 << 8,  /* 100 Gb full-duplex rate support. */
+    NETDEV_F_1TB_FD =     1 << 9,  /* 1 Tb full-duplex rate support. */
+    NETDEV_F_OTHER =      1 << 10, /* Other rate, not in the list. */
+    NETDEV_F_COPPER =     1 << 11, /* Copper medium. */
+    NETDEV_F_FIBER =      1 << 12, /* Fiber medium. */
+    NETDEV_F_AUTONEG =    1 << 13, /* Auto-negotiation. */
+    NETDEV_F_PAUSE =      1 << 14, /* Pause. */
+    NETDEV_F_PAUSE_ASYM = 1 << 15, /* Asymmetric pause. */
+#endif
+    enum {
+        _SAI_NET_DEV_SPEED_10M  = 10,
+        _SAI_NET_DEV_SPEED_100M = 100,
+        _SAI_NET_DEV_SPEED_1G   = 1000,
+        _SAI_NET_DEV_SPEED_10G  = 10000,
+        _SAI_NET_DEV_SPEED_40G  = 40000,
+        _SAI_NET_DEV_SPEED_100G = 100000,
+        _SAI_NET_DEV_SPEED_1TB  = 1000000,
+    };
 
-    return 0;
+    int status = 0;
+    struct netdev_sai *netdev = __netdev_sai_cast(netdev_);
+
+    SAI_API_TRACE_FN();
+
+    ovs_mutex_lock(&netdev->mutex);
+    if (!netdev->is_port_initialized) {
+        goto exit;
+    }
+
+    memset(current, 0, sizeof *current);
+
+    if(netdev->config.autoneg) {
+        *current |= NETDEV_F_AUTONEG;
+    }
+
+    if(netdev->config.pause_tx && netdev->config.pause_rx) {
+        *current |= NETDEV_F_PAUSE;
+    } else if(netdev->config.pause_tx) {
+        *current |= NETDEV_F_PAUSE_ASYM;
+    }
+
+    switch(netdev->config.speed) {
+    case _SAI_NET_DEV_SPEED_10M:
+        if(netdev->config.full_duplex) {
+            *current |= NETDEV_F_10MB_FD;
+        }else{
+            *current |= NETDEV_F_10MB_HD;
+        }
+        break;
+    case _SAI_NET_DEV_SPEED_100M:
+        if(netdev->config.full_duplex) {
+            *current |= NETDEV_F_100MB_FD;
+        }else{
+            *current |= NETDEV_F_100MB_HD;
+        }
+        break;
+    case _SAI_NET_DEV_SPEED_1G:
+        if(netdev->config.full_duplex) {
+            *current |= NETDEV_F_1GB_FD;
+        }else{
+            *current |= NETDEV_F_1GB_HD;
+        }
+        break;
+    case _SAI_NET_DEV_SPEED_10G:
+        *current |= NETDEV_F_10GB_FD;
+        break;
+    case _SAI_NET_DEV_SPEED_40G:
+        *current |= NETDEV_F_40GB_FD;
+        break;
+    case _SAI_NET_DEV_SPEED_100G:
+        *current |= NETDEV_F_100GB_FD;
+        break;
+    case _SAI_NET_DEV_SPEED_1TB:
+        *current |= NETDEV_F_1TB_FD;
+        break;
+    default:
+        *current |= NETDEV_F_OTHER;
+        break;
+    }
+
+exit:
+    ovs_mutex_unlock(&netdev->mutex);
+
+    return status;
 }
 
 static int

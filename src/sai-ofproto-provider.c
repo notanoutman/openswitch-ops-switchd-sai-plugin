@@ -927,8 +927,16 @@ __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
 
     if (STR_EQ(netdev_get_type(port->up.netdev), OVSREC_INTERFACE_TYPE_SYSTEM)) {
         if (-1 != bundle->vlan) {
-            status = ops_sai_vlan_access_port_add(bundle->vlan, hw_id);
-            ERRNO_LOG_EXIT(status, "Failed to add port to bundle");
+            if(PORT_VLAN_NATIVE_TAGGED == bundle->vlan_mode) {
+                status = __native_tagged_vlan_set(bundle->vlan, hw_id, true);
+
+                ops_sai_port_pvid_untag_enable_set(hw_id, false);
+            } else {
+                status = ops_sai_vlan_access_port_add(bundle->vlan, hw_id);
+                ERRNO_LOG_EXIT(status, "Failed to add port to bundle");
+
+                ops_sai_port_pvid_untag_enable_set(hw_id, true);
+            }
         }
 
         if (NULL != bundle->trunks) {
@@ -1293,6 +1301,9 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
                                                   netdev_sai_hw_id_get(port->up.netdev),
                                                   true);
                 ERRNO_LOG_EXIT(status, "Failed to reconfigure vlans");
+
+                status = ops_sai_port_pvid_untag_enable_set(netdev_sai_hw_id_get(port->up.netdev), false);
+                ERRNO_LOG_EXIT(status, "Failed to reconfigure untag enable");
             }
             status = ops_sai_vlan_trunks_port_add(added_trunks,
                                                   netdev_sai_hw_id_get(port->up.netdev));

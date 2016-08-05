@@ -12,6 +12,7 @@
 #include <sai-log.h>
 #include <sai-api-class.h>
 #include <sai-port.h>
+#include <sai-fdb.h>
 #include <list.h>
 
 VLOG_DEFINE_THIS_MODULE(sai_port);
@@ -278,7 +279,7 @@ __port_mtu_get(uint32_t hw_id, int *mtu)
                                                    1, &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to get mtu for port %d", hw_id);
 
-    *mtu = attr.value.u32;
+    *mtu = attr.value.u32 - 38;
 
 exit:
     return SAI_ERROR_2_ERRNO(status);
@@ -307,7 +308,7 @@ __port_mtu_set(uint32_t hw_id, int mtu)
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
     attr.id = SAI_PORT_ATTR_MTU;
-    attr.value.u32 = mtu;
+    attr.value.u32 = mtu + 38;
     status = sai_api->port_api->set_port_attribute(ops_sai_api_hw_id2port_id(hw_id),
                                                    &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to set %d mtu for port %d", mtu, hw_id);
@@ -462,14 +463,25 @@ __port_pvid_set(uint32_t hw_id, sai_vlan_id_t pvid)
 {
     sai_attribute_t attr = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_vlan_id_t old_vid = 0;
+    handle_t        handle;
     sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    status = __port_pvid_get(hw_id,&old_vid);
+    SAI_ERROR_LOG_EXIT(status, "Failed to get pvid %d for port %u",
+                       pvid, hw_id);
 
     attr.id = SAI_PORT_ATTR_PORT_VLAN_ID;
     attr.value.u32 = pvid;
     status = sai_api->port_api->set_port_attribute(port_oid, &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to set pvid %d for port %u",
                        pvid, hw_id);
+
+    handle.data = ops_sai_api_hw_id2port_id(hw_id);
+    status = ops_sai_fdb_flush_entrys(2/*L2MAC_FLUSH_BY_PORT_VLAN*/, handle, old_vid);
+    SAI_ERROR_LOG_EXIT(status, "Failed to ops_sai_fdb_flush_entrys vid %d for port %u",
+                       old_vid, hw_id);
 
 exit:
     return SAI_ERROR_2_ERRNO(status);
@@ -631,6 +643,28 @@ exit:
     return SAI_ERROR_2_ERRNO(status);
 }
 
+int ops_sai_port_pvid_untag_enable_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->pvid_untag_enable_set);
+    return ops_sai_port_class()->pvid_untag_enable_set(hw_id, enable);
+}
+
+int __port_pvid_untag_enable_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_CUSTOM_UNTAG_DEFAULT_VLAN;
+    attr.value.u32 = (uint32_t)enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set __port_pvid_untag_enable_set %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
 /*
  * Applies all supported port configuration except from hw_enable.
  *
@@ -731,6 +765,7 @@ DEFINE_GENERIC_CLASS(struct port_class, port) = {
         .ingress_filter_set = __port_ingress_filter_set,
         .drop_tagged_set    = __port_drop_tagged_set,
         .drop_untagged_set  = __port_drop_untagged_set,
+        .pvid_untag_enable_set = __port_pvid_untag_enable_set,
         .deinit = __port_deinit,
 };
 

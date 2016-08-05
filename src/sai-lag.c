@@ -47,7 +47,8 @@ int  __lag_set_balance_mode(int,int);
 static int
 __lag_idle_index_init(unsigned long **bitmap_index)
 {
-    *bitmap_index = bitmap_allocate1(INT_MAX);
+    /* fix malloc SHRT_MAC(32768) size == 4096 == 4k */
+    *bitmap_index = bitmap_allocate1(SHRT_MAX);
 
     return 0;
 }
@@ -57,7 +58,7 @@ __lag_idle_index_get(unsigned long *bitmap_index)
 {
     int idle_index = 0;
 
-    BITMAP_FOR_EACH_1 (idle_index, INT_MAX, bitmap_index) {
+    BITMAP_FOR_EACH_1 (idle_index, SHRT_MAX, bitmap_index) {
         bitmap_set0(bitmap_index, idle_index);
         return idle_index;
     }
@@ -108,7 +109,7 @@ __lag_entry_hmap_find_create(struct hmap *hlag_hmap, int lagid, bool is_create)
 
     hmap_init(&hlag_entry->hmap_member_ports);
 
-    hmap_insert(&all_lag, &hlag_entry->hmap_node, hash_int(hlag_entry->lagid, 0));
+    hmap_insert(hlag_hmap, &hlag_entry->hmap_node, hash_int(hlag_entry->lagid, 0));
 
     return hlag_entry;
 }

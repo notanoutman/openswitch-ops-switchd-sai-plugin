@@ -137,6 +137,12 @@ struct port_class {
     int (*ingress_filter_set)(uint32_t hw_id, bool enable);
     int (*drop_tagged_set)(uint32_t hw_id, bool enable);
     int (*drop_untagged_set)(uint32_t hw_id, bool enable);
+
+    /*
+     * set port untag vlan id when transmit packet vid equal to PVID
+     * defaullt true
+     */
+    int (*pvid_untag_enable_set)(uint32_t hw_id, bool enable);
     /*
      * De-initialize port functionality.
      */
@@ -174,6 +180,7 @@ int ops_sai_port_stats_get(uint32_t, struct netdev_stats *);
 int ops_sai_port_ingress_filter_set(uint32_t, bool);
 int ops_sai_port_drop_tagged_set(uint32_t, bool);
 int ops_sai_port_drop_untagged_set(uint32_t, bool);
+int ops_sai_port_pvid_untag_enable_set(uint32_t, bool);
 
 void ops_sai_port_deinit(void);
 

@@ -49,7 +49,8 @@ static  int __stp_get_default_instance(int*);
 static int
 __stp_idle_index_init(unsigned long **bitmap_index)
 {
-    *bitmap_index = bitmap_allocate1(INT_MAX);
+    /* fix malloc SHRT_MAC(32768) size == 4096 == 4k */
+    *bitmap_index = bitmap_allocate1(SHRT_MAX);
 
     bitmap_set0(*bitmap_index, 0);           /* skip index 0 */
 
@@ -61,7 +62,7 @@ __stp_idle_index_get(unsigned long *bitmap_index)
 {
     int idle_index = 0;
 
-    BITMAP_FOR_EACH_1 (idle_index, INT_MAX, bitmap_index) {
+    BITMAP_FOR_EACH_1 (idle_index, SHRT_MAX, bitmap_index) {
         bitmap_set0(bitmap_index, idle_index);
         return idle_index;
     }
@@ -174,7 +175,7 @@ __stp_entry_hmap_find_create(struct hmap *hstp_hmap, int stpid, bool is_create)
 
     hstp_entry->stpid = _cur_stp_id;
 
-    hmap_insert(&all_stp, &hstp_entry->hmap_node, hash_int(hstp_entry->stpid, 0));
+    hmap_insert(hstp_hmap, &hstp_entry->hmap_node, hash_int(hstp_entry->stpid, 0));
 
     return hstp_entry;
 }
