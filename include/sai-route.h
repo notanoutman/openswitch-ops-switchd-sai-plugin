@@ -32,6 +32,7 @@ struct route_class {
      * @return 0     if operation completed successfully.
      * @return errno if operation failed.*/
     int  (*ip_to_me_add)(const handle_t *vrid, const char *prefix);
+    int  (*ip_to_me_delete)(const handle_t *vrid, const char *prefix);
     /**
      *  Function for adding local route.
      *  Means while creating new routing interface and assigning IP address to it
@@ -46,7 +47,10 @@ struct route_class {
      * @return errno if operation failed.*/
     int  (*local_add)(const handle_t *vrid,
                       const char     *prefix,
-                      const handle_t *rifid);
+                      const handle_t *rifid,
+                      uint32_t           next_hop_count,
+                      char *const *const next_hops);
+
     /**
      *  Function for adding next hops(list of remote routes) which are accessible
      *  over specified IP prefix
@@ -89,6 +93,11 @@ struct route_class {
      * @return 0     if operation completed successfully.
      * @return errno if operation failed.*/
     int  (*remove)(const handle_t *vrid, const char *prefix);
+
+    int  (*if_addr_add)(const handle_t *vrid, const char *prefix, const char *ifname);
+
+    int  (*if_addr_delete)(const handle_t *vrid, const char *prefix, const char *ifname);
+
     /**
      * De-initializes route.
      */
@@ -134,6 +143,13 @@ typedef struct sai_ops_nexthop_s
     char        *id;                        /* IP address or Port name */
 }sai_ops_nexthop_t;
 
+struct if_addr {
+    struct hmap_node if_addr_hmap_node;
+    bool is_ipv6_addr;
+    char *ifname;       /* interface name  */
+    char *prefix;
+    handle_t key;
+};
 
 static inline void
 ops_sai_route_init(void)
@@ -150,12 +166,21 @@ ops_sai_route_ip_to_me_add(const handle_t *vrid, const char *prefix)
 }
 
 static inline int
+ops_sai_route_ip_to_me_delete(const handle_t *vrid, const char *prefix)
+{
+    ovs_assert(ops_sai_route_class()->ip_to_me_delete);
+    return ops_sai_route_class()->ip_to_me_delete(vrid, prefix);
+}
+
+static inline int
 ops_sai_route_local_add(const handle_t *vrid,
                         const char     *prefix,
-                        const handle_t *rifid)
+                        const handle_t *rifid,
+                        uint32_t           next_hop_count,
+                        char *const *const next_hops)
 {
     ovs_assert(ops_sai_route_class()->local_add);
-    return ops_sai_route_class()->local_add(vrid, prefix, rifid);
+    return ops_sai_route_class()->local_add(vrid, prefix, rifid, next_hop_count, next_hops);
 }
 
 static inline int
@@ -187,6 +212,21 @@ ops_sai_route_remove(const handle_t *vrid, const char     *prefix)
     ovs_assert(ops_sai_route_class()->remove);
     return ops_sai_route_class()->remove(vrid, prefix);
 }
+
+static inline int
+ops_sai_route_if_addr_add(const handle_t *vrid, const char *prefix, const char *ifname)
+{
+    ovs_assert(ops_sai_route_class()->if_addr_add);
+    return ops_sai_route_class()->if_addr_add(vrid, prefix, ifname);
+}
+
+static inline int
+ops_sai_route_if_addr_delete(const handle_t *vrid, const char *prefix, const char *ifname)
+{
+    ovs_assert(ops_sai_route_class()->if_addr_delete);
+    return ops_sai_route_class()->if_addr_delete(vrid, prefix, ifname);
+}
+
 
 static inline void
 ops_sai_route_deinit(void)

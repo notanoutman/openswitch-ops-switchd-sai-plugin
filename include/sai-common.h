@@ -65,6 +65,14 @@
 
 #define STR_EQ(str1, str2)      (strcmp(str1, str2) == 0)
 
+#define OPS_SAI_SET_FLAG(VAL,FLAG)          (VAL) = (VAL) | (FLAG)
+#define OPS_SAI_UNSET_FLAG(VAL,FLAG)        (VAL) = (VAL) & ~(FLAG)
+#define OPS_SAI_FLAG_ISSET(VAL,FLAG)        (((VAL) & (FLAG)) == (FLAG))
+
+#define OPS_SAI_IS_BIT_SET(flag, bit)   (((flag) & (1 << (bit))) ? 1: 0)
+#define OPS_SAI_SET_BIT(flag, bit)      (flag) = (flag) | (1 << (bit))
+#define OPS_SAI_CLEAR_BIT(flag, bit)    (flag) = (flag) & (~(1 << (bit)))
+
 struct ip_address {
     struct hmap_node addr_node;
     char *address;
