@@ -367,6 +367,10 @@ ops_sai_nexthop_lookup(sai_ops_route_t *route, char *id)
     sai_ops_nexthop_t   *nh         = NULL;
     char                *hashstr    = NULL;
 
+    if (!route || !id) {
+        return NULL;
+    }
+
     hashstr = id;
     HMAP_FOR_EACH_WITH_HASH(nh, node, hash_string(hashstr, 0),
                             &route->nexthops) {
@@ -1347,6 +1351,7 @@ __route_local_add(const handle_t *vrid,
     int             index           = 0;
     char            *nh_connect[next_hop_count];
     char            *buf_preifx[next_hop_count];
+    char            *buf_nh[next_hop_count];
 
 
     buf_preifx2 = xstrdup(prefix);
@@ -1359,22 +1364,31 @@ __route_local_add(const handle_t *vrid,
     pefix_connect[0] = strtok(buf_preifx2, "/");
     if (!is_connect) {
         for (index = 0; index < next_hop_count; index ++) {
-            buf_preifx[index] = xstrdup(next_hops[index]);
+            buf_nh[index] = xstrdup(next_hops[index]);
 
-            pst_if_addr = if_addr_hmap_find_by_ifname(&all_if_addr, buf_preifx[index]);
+            pst_if_addr = if_addr_hmap_find_by_ifname(&all_if_addr, buf_nh[index]);
             if (NULL == pst_if_addr) {
+                buf_preifx[index] = NULL;
+                nh_connect[index] = NULL;
                 continue;
+            } else {
+                buf_preifx[index] = xstrdup(pst_if_addr->prefix);
+                nh_connect[index] = strtok(buf_preifx[index], "/");
             }
-
-            buf_preifx[index] = xstrdup(pst_if_addr->prefix);
-            nh_connect[index] = strtok(buf_preifx[index], "/");
         }
 
         status = __sai_route_remote_action(vrid->data, prefix, next_hop_count, nh_connect, cmd_add);
 
         for (index = 0; index < next_hop_count; index ++) {
-            free(buf_preifx[index]);
-            buf_preifx[index] = NULL;
+            if (buf_nh[index]) {
+                free(buf_nh[index]);
+                buf_nh[index] = NULL;
+            }
+
+            if (buf_preifx[index]) {
+                free(buf_preifx[index]);
+                buf_preifx[index] = NULL;
+            }
         }
     } else {
         status = __sai_route_local_action(vrid->data, prefix, 1, pefix_connect, cmd_add);
