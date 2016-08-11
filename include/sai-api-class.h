@@ -20,6 +20,7 @@ struct ops_sai_api_class {
     sai_switch_api_t *switch_api;
     sai_port_api_t *port_api;
     sai_vlan_api_t *vlan_api;
+    sai_mirror_api_t            *mirror_api;
     sai_hostif_api_t *host_interface_api;
     sai_policer_api_t *policer_api;
     sai_hash_api_t *hash_api;

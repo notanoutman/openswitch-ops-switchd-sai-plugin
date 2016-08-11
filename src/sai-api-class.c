@@ -90,6 +90,9 @@ ops_sai_api_init(void)
     status = sai_api_query(SAI_API_VLAN, (void **) &sai_api.vlan_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI vlan api");
 
+    status = sai_api_query(SAI_API_MIRROR, (void **) &sai_api.mirror_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI Mirror api");
+
     status = sai_api_query(SAI_API_HOST_INTERFACE,
                            (void **) &sai_api.host_interface_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI host interface api");

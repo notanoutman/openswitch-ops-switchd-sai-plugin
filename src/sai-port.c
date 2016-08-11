@@ -522,6 +522,13 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
         STAT_IDX_ETHER_RX_OVERSIZE_PKTS,
 #endif
         STAT_IDX_ETHER_STATS_CRC_ALIGN_ERRORS,
+
+#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+        STAT_IDX_IF_IN_PKTS,
+        STAT_IDX_IF_OUT_PKTS,
+        STAT_IDX_IF_IN_CRC_ERR_PKTS,
+#endif
+
         STAT_IDX_COUNT
     };
     static const sai_port_stat_counter_t counter_ids[] = {
@@ -541,6 +548,12 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
         SAI_PORT_STAT_ETHER_RX_OVERSIZE_PKTS,
 #endif
         SAI_PORT_STAT_ETHER_STATS_CRC_ALIGN_ERRORS,
+
+#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+        SAI_PORT_STAT_IF_IN_PKTS,
+        SAI_PORT_STAT_IF_OUT_PKTS,
+        SAI_PORT_STAT_IF_IN_CRC_ERR_PKTS,
+#endif
     };
     uint64_t counters[STAT_IDX_COUNT] = {};
     sai_status_t status = SAI_STATUS_SUCCESS;
@@ -553,10 +566,15 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
                                                STAT_IDX_COUNT, counters);
     SAI_ERROR_LOG_EXIT(status, "Failed to get stats for port %d", hw_id);
 
+#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+    stats->rx_packets = counters[STAT_IDX_IF_IN_PKTS];
+    stats->tx_packets = counters[STAT_IDX_IF_OUT_PKTS];
+#else
     stats->rx_packets = counters[STAT_IDX_IF_IN_UCAST_PKTS]
                       + counters[STAT_IDX_IF_IN_NON_UCAST_PKTS];
     stats->tx_packets = counters[STAT_IDX_IF_OUT_UCAST_PKTS]
                       + counters[STAT_IDX_IF_OUT_NON_UCAST_PKTS];
+#endif
     stats->rx_bytes = counters[STAT_IDX_IF_IN_OCTETS];
     stats->tx_bytes = counters[STAT_IDX_IF_OUT_OCTETS];
     stats->rx_errors = counters[STAT_IDX_IF_IN_ERRORS];
@@ -568,7 +586,12 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
 #ifndef MLNX_SAI
     stats->rx_over_errors = counters[STAT_IDX_ETHER_RX_OVERSIZE_PKTS];
 #endif
+#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+    stats->rx_crc_errors = counters[STAT_IDX_IF_IN_CRC_ERR_PKTS];
+#else
     stats->rx_crc_errors = counters[STAT_IDX_ETHER_STATS_CRC_ALIGN_ERRORS];
+#endif
+
 
 exit:
     return SAI_ERROR_2_ERRNO(status);
