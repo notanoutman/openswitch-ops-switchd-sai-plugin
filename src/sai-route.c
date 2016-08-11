@@ -1474,6 +1474,8 @@ __route_remote_nh_remove(handle_t           vrid,
     for (index = 0; index < next_hop_count; index ++) {
         pst_if_addr = if_addr_hmap_find_by_ifname(&all_if_addr, next_hops[index]);
         if (NULL == pst_if_addr) {
+            buf_preifx[index] = NULL;
+            nh_connect[index] = NULL;
             continue;
         } else {
             is_connect = true;
@@ -1492,8 +1494,10 @@ __route_remote_nh_remove(handle_t           vrid,
     }
 
     for (index = 0; index < next_hop_count; index ++) {
-        free(buf_preifx[index]);
-        buf_preifx[index] = NULL;
+        if (buf_preifx[index]) {
+            free(buf_preifx[index]);
+            buf_preifx[index] = NULL;
+        }
     }
 
     return status;

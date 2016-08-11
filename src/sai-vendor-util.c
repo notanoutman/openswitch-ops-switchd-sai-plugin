@@ -8,6 +8,7 @@
 #include <sai-log.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 //#include <packets.h>
 //#include <socket-util.h>
 //#include <netinet/in.h>
@@ -26,6 +27,8 @@ ops_sai_vendor_base_mac_get(sai_mac_t mac)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
     static sai_mac_t    _mac_addr = {0};
+
+    srand(time(NULL));
 
     if(0x0 == _mac_addr[1])
     {

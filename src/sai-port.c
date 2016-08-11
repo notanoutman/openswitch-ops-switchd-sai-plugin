@@ -184,7 +184,7 @@ __port_config_get(uint32_t hw_id, struct ops_sai_port_config *conf)
 
     status = sai_api->port_api->get_port_attribute(port_oid, PORT_ATTR_COUNT,
                                                    attr);
-    SAI_ERROR_LOG_EXIT(status, "Failed to get config on port %d", hw_id);
+    SAI_ERROR_EXIT(status);
 
     conf->hw_enable = attr[PORT_ATTR_HW_ENABLE].value.booldata;
     conf->autoneg = attr[PORT_ATTR_AUTONEG].value.booldata;
@@ -467,10 +467,14 @@ __port_pvid_set(uint32_t hw_id, sai_vlan_id_t pvid)
     handle_t        handle;
     sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-
+    VLOG_DBG("__port_pvid_set hw_id = %u, pvid = %d", hw_id,pvid);
     status = __port_pvid_get(hw_id,&old_vid);
     SAI_ERROR_LOG_EXIT(status, "Failed to get pvid %d for port %u",
                        pvid, hw_id);
+
+    if(pvid == old_vid) {
+        return 0;
+    }
 
     attr.id = SAI_PORT_ATTR_PORT_VLAN_ID;
     attr.value.u32 = pvid;
@@ -478,6 +482,7 @@ __port_pvid_set(uint32_t hw_id, sai_vlan_id_t pvid)
     SAI_ERROR_LOG_EXIT(status, "Failed to set pvid %d for port %u",
                        pvid, hw_id);
 
+    VLOG_DBG("__port_pvid_set ops_sai_fdb_flush_entrys hw_id = %u, pvid = %d", hw_id,old_vid);
     handle.data = ops_sai_api_hw_id2port_id(hw_id);
     status = ops_sai_fdb_flush_entrys(2/*L2MAC_FLUSH_BY_PORT_VLAN*/, handle, old_vid);
     SAI_ERROR_LOG_EXIT(status, "Failed to ops_sai_fdb_flush_entrys vid %d for port %u",

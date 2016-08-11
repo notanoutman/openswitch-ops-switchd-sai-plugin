@@ -281,6 +281,10 @@ __vlan_port_set(sai_vlan_id_t vid, uint32_t hw_id,
         goto exit;
     }
 
+    if(0 == add) {
+	vid = OPS_SAI_PORT_DEFAULT_PVID;
+    }
+
     /* No need to convert return code - already errno value. */
     return ops_sai_port_pvid_set(hw_id, vid);
 

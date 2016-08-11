@@ -146,6 +146,7 @@ sai_mac_learning_entry_add(	struct mlearn_hmap 	*hmap_entry,
 							uint32_t 			attr_count,
 							const mac_event 	event)
 {
+    struct mlearn_hmap_node *entry         = NULL;
     struct eth_addr 		mac_eth;
     uint32_t 				hash 		= 0;
     int 					actual_size = 0;
@@ -171,6 +172,64 @@ sai_mac_learning_entry_add(	struct mlearn_hmap 	*hmap_entry,
     if (!strlen(port_name)) {
         VLOG_ERR("%s: not able to find port name for port_id: %lx ", __FUNCTION__, port_id.data);
         return;
+    }
+
+    HMAP_FOR_EACH_WITH_HASH (entry, hmap_node, hash,
+                                 &(hmap_entry->table)) {
+        VLOG_DBG("%s: cur_tables, port: %s, oper: %d, vlan: %d, MAC: %s",
+                     __FUNCTION__, entry->port_name, entry->oper, entry->vlan,
+                     ether_ntoa((struct ether_addr *)entry->mac.ea));
+
+        if ((entry->vlan == vlan) && eth_addr_equals(entry->mac, mac_eth)) {
+            if ((event == MLEARN_ADD) && (entry->oper == MLEARN_DEL)) {
+                if (0 == strcmp(port_name,entry->port_name) /* port_id == entry->port */) {
+                    /*
+                     * remove this entry from hmap
+                     */
+                    entry->oper = MLEARN_UNDEFINED;
+		      entry->vlan = 4096;
+                    VLOG_DBG("%s: move event, entry found removing,add->undefined, vlan: %d, MAC: %s", __FUNCTION__,
+                                vlan, ether_ntoa((struct ether_addr *)entry->mac.ea));
+                    found = true;
+                }
+            } else if ((event == MLEARN_DEL) && (entry->oper == MLEARN_ADD)) {
+                /*
+                 * remove this entry from hmap
+                 */
+                if (0 == strcmp(port_name,entry->port_name) /* port_id == entry->port */) {
+                    /*
+                     * remove this entry from hmap
+                     */
+                    entry->oper = MLEARN_UNDEFINED;
+		      entry->vlan = 4096;
+                    VLOG_DBG("%s: move event, entry found removing,del->undefined, vlan: %d, MAC: %s", __FUNCTION__,
+                                vlan, ether_ntoa((struct ether_addr *)entry->mac.ea));
+                    found = true;
+                }
+            } else if ((event == MLEARN_DEL) && (entry->oper == MLEARN_DEL)) {
+                /*
+                 * update this entry from hmap
+                 */
+                if (0 == strcmp(port_name,entry->port_name) /* port_id == entry->port */) {
+                    /*
+                     * update this entry from hmap
+                     */
+                    VLOG_DBG("%s: update event, entry found removing to removing", __FUNCTION__);
+                    found = true;
+                }
+            } else if ((event == MLEARN_ADD) && (entry->oper == MLEARN_ADD)) {
+                /*
+                 * update this entry from hmap
+                 */
+                if (0 == strcmp(port_name,entry->port_name) /* port_id == entry->port */) {
+                    /*
+                     * update this entry from hmap
+                     */
+                    VLOG_DBG("%s: update event, entry found adding to adding", __FUNCTION__);
+                    found = true;
+                }
+            }
+        }
     }
 
     if (!found) {
@@ -388,11 +447,13 @@ int
 sai_mac_learning_l2_addr_flush_handler(mac_flush_params_t *settings)
 {
     int                 rc  = 0;
-    handle_t            id  = {0};
+    handle_t            id  = HANDLE_INITIALIZAER;
 
     /* Get Harware Port */
     if (settings->options == L2MAC_FLUSH_BY_PORT
-        || settings->options == L2MAC_FLUSH_BY_PORT_VLAN) {
+        || settings->options == L2MAC_FLUSH_BY_PORT_VLAN
+        || settings->options == L2MAC_FLUSH_BY_TRUNK
+        || settings->options == L2MAC_FLUSH_BY_TRUNK_VLAN) {
         rc = sai_mac_learning_get_id_from_port_name(settings->port_name, &id);
         if (rc) {
             VLOG_ERR_RL(&mac_learning_rl, "%s: %s name not found flags %u mode %d",

@@ -1065,49 +1065,48 @@ exit:
 
 static int
 __lag_tx_member_reconfigure(struct ofbundle_sai *bundle,
-                              const struct ofproto_bundle_settings *s)
+                              const struct ofproto_bundle_settings *s, int tx_port_add)
 {
     size_t i;
     bool port_found = false;
     int status = 0;
     struct ofport_sai *port = NULL, *next_port = NULL, *s_port = NULL;
 
-    /* Figure out which tx ports were removed. */
-    LIST_FOR_EACH_SAFE(port, next_port, bundle_tx_lag_node, &bundle->tx_number_ports) {
-        port_found = false;
-        for (i = 0; i < s->n_slaves_tx_enable; i++) {
-            s_port = __get_ofp_port(bundle->ofproto, s->slaves_tx_enable[i]);
-            if (port == s_port) {
-                port_found = true;
-                break;
-            }
-        }
-        if (!port_found) {
-            status = __ofbundle_lag_tx_port_del(port);
-            ERRNO_LOG_EXIT(status, "Failed to remove lag number port");
-        }
-    }
-
-    /* Figure out which tx ports were added. */
-    port = NULL;
-    next_port = NULL;
-    for (i = 0; i < s->n_slaves_tx_enable; i++) {
-        port_found = false;
-        s_port = __get_ofp_port(bundle->ofproto, s->slaves_tx_enable[i]);
-
+    if(0 == tx_port_add) {
+        /* Figure out which tx ports were removed. */
         LIST_FOR_EACH_SAFE(port, next_port, bundle_tx_lag_node, &bundle->tx_number_ports) {
-            if (port == s_port) {
-                port_found = true;
-                break;
+            port_found = false;
+            for (i = 0; i < s->n_slaves_tx_enable; i++) {
+                s_port = __get_ofp_port(bundle->ofproto, s->slaves_tx_enable[i]);
+                if (port == s_port) {
+                    port_found = true;
+                    break;
+                }
+            }
+            if (!port_found) {
+                status = __ofbundle_lag_tx_port_del(port);
+                ERRNO_LOG_EXIT(status, "Failed to remove lag number port");
             }
         }
+    } else {
+        /* Figure out which tx ports were added. */
+        for (i = 0; i < s->n_slaves_tx_enable; i++) {
+            port_found = false;
+            s_port = __get_ofp_port(bundle->ofproto, s->slaves_tx_enable[i]);
 
-        if (!port_found) {
-            status = __ofbundle_lag_tx_port_add(bundle,s_port);
+            LIST_FOR_EACH_SAFE(port, next_port, bundle_tx_lag_node, &bundle->tx_number_ports) {
+                if (port == s_port) {
+                    port_found = true;
+                    break;
+                }
+            }
+
+            if (!port_found) {
+                status = __ofbundle_lag_tx_port_add(bundle,s_port);
+            }
+            ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
         }
-        ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
     }
-
 exit:
     return status;
 }
@@ -1332,6 +1331,12 @@ __ofbundle_ports_reconfigure(struct ofbundle_sai *bundle,
     int status = 0;
     struct ofport_sai *port = NULL, *next_port = NULL, *s_port = NULL;
 
+    if(-1 != bundle->bond_hw_handle)
+    {
+        status = __lag_tx_member_reconfigure(bundle, s, 0);
+        ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
+    }
+
     /* Figure out which ports were removed. */
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
         port_found = false;
@@ -1373,7 +1378,7 @@ __ofbundle_ports_reconfigure(struct ofbundle_sai *bundle,
 
     if(-1 != bundle->bond_hw_handle)
     {
-        status = __lag_tx_member_reconfigure(bundle, s);
+        status = __lag_tx_member_reconfigure(bundle, s, 1);
         ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
     }
 
@@ -1928,6 +1933,7 @@ static void
 __ofbundle_destroy(struct ofbundle_sai *bundle)
 {
     int status = 0;
+    handle_t            handle;
     struct port         *port_      = NULL;
     struct ofport_sai *port = NULL, *next_port = NULL;
 
@@ -1955,6 +1961,9 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
     }
 
     if (bundle->bond_hw_handle != -1) {
+	ops_sai_lag_get_handle_id(bundle->bond_hw_handle,&handle);
+        ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, handle,bundle->vlan);
+
         ops_sai_lag_remove(bundle->bond_hw_handle);
         bundle->bond_hw_handle = -1;
         port_->bond_hw_handle = bundle->bond_hw_handle;
@@ -2021,6 +2030,7 @@ __ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
     struct port         *port_      = NULL;
     //bool                port_found  = false;
     int                 status      = 0;
+    handle_t		hand_id;
     //struct ofport_sai   *port       = NULL, *next_port = NULL, *s_port = NULL;
 
     port_ = (struct port *)bundle->aux;
@@ -2039,6 +2049,9 @@ __ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
             return 0;
         }
     } else if(false == s->hw_bond_should_exist){
+	ops_sai_lag_get_handle_id(bundle->bond_hw_handle,&hand_id);
+        ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, hand_id,bundle->vlan);
+
         ops_sai_lag_remove(bundle->bond_hw_handle);
 
         bundle->bond_hw_handle = -1;
@@ -2689,7 +2702,8 @@ ofbundle_get_handle_id_by_port_name(const char *name, handle_t *handle_id)
 {
     struct ofproto_sai  *ofproto_sai  = NULL;
     struct ofbundle_sai *ofbundle_sai = NULL;
-    handle_t            hand_id       = HANDLE_INITIALIZAER;
+
+    ovs_assert(handle_id);
 
     HMAP_FOR_EACH(ofproto_sai, all_ofproto_sai_node, &all_ofproto_sai) {
         if (STR_EQ(ofproto_sai->up.type,SAI_INTERFACE_TYPE_SYSTEM))
@@ -2700,16 +2714,17 @@ ofbundle_get_handle_id_by_port_name(const char *name, handle_t *handle_id)
 
                 if(STR_EQ(name, ofbundle_sai->name))
                 {
-                    if (!ops_sai_lag_get_handle_id(ofbundle_sai->bond_hw_handle, &hand_id))
+                    if (!ops_sai_lag_get_handle_id(ofbundle_sai->bond_hw_handle, handle_id))
                     {
-                        return 0;
+
+                        return true;
                     }
 
-                    return -1;
+                    return false;
                 }
             }
         }
     }
 
-    return -1;
+    return false;
 }
