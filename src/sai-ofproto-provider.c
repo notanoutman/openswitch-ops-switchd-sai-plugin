@@ -2125,7 +2125,7 @@ __ofbundle_lookup_by_netdev_name(struct ofproto_sai *ofproto,
 
 static int
 __ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
-                               const struct ofproto_bundle_settings *s)
+                               struct ofproto_bundle_settings *s)
 {
     //size_t              i;
     struct port         *port_      = NULL;
@@ -2137,6 +2137,14 @@ __ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
     port_ = (struct port *)bundle->aux;
 
     if (-1 == bundle->bond_hw_handle) {
+	if(strncmp(bundle->name,"lag",3) == 0) {
+		if(bundle->ipv4_primary == NULL && s->ip4_address == NULL) {
+			if(port_->cfg->ip4_address) {
+                s->ip4_address = port_->cfg->ip4_address;
+                s->ip_change   |= PORT_PRIMARY_IPv4_CHANGED;
+			}
+        }
+	}
         if(s->hw_bond_should_exist || s->bond_handle_alloc_only) {
             ops_sai_lag_create(&bundle->bond_hw_handle);
 
@@ -2214,12 +2222,19 @@ __bundle_set(struct ofproto *ofproto_, void *aux,
 {
     struct ofbundle_sai *bundle = NULL;
     int status = 0;
+    struct ofproto_bundle_settings config;
+    struct ofproto_bundle_settings *pconfig = NULL;
     struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
 
     SAI_API_TRACE_FN();
 
     if ((s && STR_EQ(s->name, DEFAULT_BRIDGE_NAME))) {
         goto exit;
+    }
+
+    if(s) {
+        memcpy(&config,s,sizeof(config));
+	    pconfig = &config;
     }
 
     bundle = __ofbundle_lookup(ofproto, aux);
@@ -2229,13 +2244,13 @@ __bundle_set(struct ofproto *ofproto_, void *aux,
     }
 
     if (NULL == bundle) {
-        bundle = __ofbundle_create(ofproto, aux, s);
+        bundle = __ofbundle_create(ofproto, aux, pconfig);
     }
 
-    status = __ofbundle_lag_reconfigure(bundle, s);
+    status = __ofbundle_lag_reconfigure(bundle, pconfig);
     ERRNO_LOG_EXIT(status, "Failed to set bundle lag");
 
-    status = __ofbundle_ports_reconfigure(bundle, s);
+    status = __ofbundle_ports_reconfigure(bundle, pconfig);
     ERRNO_LOG_EXIT(status, "Failed to set bundle ports");
 #if 0
     if (s->n_slaves > 1) {
@@ -2244,8 +2259,8 @@ __bundle_set(struct ofproto *ofproto_, void *aux,
     }
 #endif
     if (STR_EQ(ofproto_->type, SAI_INTERFACE_TYPE_VRF)) {
-        __ofbundle_router_intf_reconfigure(bundle, s);
-	    __ofbundle_ip_reconfigure(bundle, s);
+        __ofbundle_router_intf_reconfigure(bundle, pconfig);
+	    __ofbundle_ip_reconfigure(bundle, pconfig);
     }
 
 exit:
