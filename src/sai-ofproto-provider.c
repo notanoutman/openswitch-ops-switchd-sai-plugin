@@ -1468,6 +1468,28 @@ __ofbundle_intf_mac_reconfigure(struct ofport_sai *port, bool is_create)
     return status;
 }
 
+static int
+__ofbundle_lag_intf_mac_reconfigure(const char* port_name)
+{
+    int         status = 0;
+    char        sys_cmd[256];
+    char        *mac_addr = NULL;
+    struct      eth_addr mac;
+    const struct    ether_addr *p_mac = (void *)mac.ea;
+
+    memset(sys_cmd, 0, sizeof(sys_cmd));
+
+    ops_sai_vendor_base_mac_get(mac.ea);
+
+    mac_addr = ether_ntoa(p_mac);
+    snprintf(sys_cmd, sizeof(sys_cmd), "ip netns exec swns ip link set address %s dev %s",
+            mac_addr, port_name);
+
+    system(sys_cmd);
+
+    return status;
+}
+
 /*
  * Reconfigures router interface.
  *
@@ -1516,7 +1538,15 @@ __ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
         goto exit;
     } else {
         rif_type = ROUTER_INTF_TYPE_PORT;
-        handle.data = netdev_sai_hw_id_get(port->up.netdev);
+
+	 if(strncmp(s->name,"lag",3) == 0) {
+		if(bundle->bond_hw_handle != -1) {
+			status = ops_sai_lag_get_handle_id(bundle->bond_hw_handle, &handle);
+			ERRNO_EXIT(status);
+		}
+     }else{
+        handle.data = ops_sai_api_hw_id2port_id(netdev_sai_hw_id_get(port->up.netdev));
+	 }
     }
 
     if (bundle->router_intf.created &&
@@ -1539,6 +1569,10 @@ __ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
                                                        &bundle->router_intf.rifid);
             __ofbundle_intf_mac_reconfigure(port, true);
             ERRNO_EXIT(status);
+        }
+
+        if(strncmp(s->name,"lag",3) == 0) {
+            __ofbundle_lag_intf_mac_reconfigure(s->name);
         }
     }
 
@@ -2070,10 +2104,18 @@ __ofbundle_lookup_by_netdev_name(struct ofproto_sai *ofproto,
     ovs_assert(ofproto);
     ovs_assert(name);
 
-    HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
-        LIST_FOR_EACH(port, bundle_node, &bundle->ports) {
-            if (STR_EQ(netdev_get_name(port->up.netdev), name)) {
-                return bundle;
+    if(strncmp(name, "lag", 3) == 0) {
+        HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
+            if(strcmp(bundle->name, name) == 0) {
+                 return bundle;
+             }
+         }
+    } else {
+        HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
+            LIST_FOR_EACH(port, bundle_node, &bundle->ports) {
+                if (STR_EQ(netdev_get_name(port->up.netdev), name)) {
+                    return bundle;
+                }
             }
         }
     }
