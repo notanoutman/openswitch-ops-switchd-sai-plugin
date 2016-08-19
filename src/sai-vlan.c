@@ -83,6 +83,30 @@ __vlan_init(void)
     }
 }
 
+int
+ops_sai_vlan_intf_update(int vid, bool add)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    struct hvlan_mb_entry *hnode_entry = NULL;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    if (add) {
+        status = sai_api->vlan_api->create_vlan(vid);
+        if (SAI_STATUS_ITEM_ALREADY_EXISTS == status) {
+            return SAI_STATUS_SUCCESS;
+        }
+
+        SAI_ERROR_LOG_EXIT(status, "Failed to %s vlan vid %d", add ? "create" : "remove", vid);
+
+        HMAP_FOR_EACH(hnode_entry, hmap_node, &all_vlan_member[vid]) {
+            __vlan_port_set(vid, hnode_entry->hw_id, hnode_entry->tag_mode, true);
+        }
+    }
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
 /*
  * De-initialize VLANs.
  */
@@ -221,12 +245,18 @@ __vlan_set(int vid, bool add)
 
     if (add) {
         status = sai_api->vlan_api->create_vlan(vid);
+        if (SAI_STATUS_ITEM_ALREADY_EXISTS == status) {
+            status = SAI_STATUS_SUCCESS;
+            goto out;
+        }
+
     } else {
         status = sai_api->vlan_api->remove_vlan(vid);
     }
-    SAI_ERROR_LOG_EXIT(status, "Failed to %s vlan vid %d",
-                       add ? "create" : "remove", vid);
 
+    SAI_ERROR_LOG_EXIT(status, "Failed to %s vlan vid %d", add ? "create" : "remove", vid);
+
+out:
     if(add) {
         HMAP_FOR_EACH(hnode_entry, hmap_node, &all_vlan_member[vid]) {
             __vlan_port_set(vid, hnode_entry->hw_id, hnode_entry->tag_mode, true);

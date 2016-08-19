@@ -252,11 +252,14 @@ static int __bundle_set(struct ofproto *, void *,
 static void __bundle_remove(struct ofport *);
 static int __bundle_get(struct ofproto *, void *, int *);
 static int __set_vlan(struct ofproto *, int, bool);
+static struct ofmirror_sai *__ofmirror_lookup(struct ofproto_sai *ofproto, void *aux);
+static void __ofmirror_destroy(struct ofmirror_sai *mirror, int all);
 static int __mirror_set(struct ofproto *ofproto_, void *aux,
         const struct ofproto_mirror_settings *s);
 static int __mirror_get_stats(struct ofproto *ofproto, void *aux,
         uint64_t *packets, uint64_t *bytes);
 static bool __is_mirror_output_bundle(const struct ofproto *ofproto, void *aux);
+static void __mirror_get_bundle_port_info(struct ofbundle_sai *bundle, sai_mirror_porttype_t *pt, sai_mirror_portid_t *portid);
 static inline struct ofproto_sai_group *__ofproto_sai_group_cast(const struct
                                                                  ofgroup *);
 static struct ofgroup *__group_alloc(void);
@@ -2029,6 +2032,9 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
     handle_t            handle;
     struct port         *port_      = NULL;
     struct ofport_sai *port = NULL, *next_port = NULL;
+    struct ofmirror_sai	*mir = NULL, *n_mir = NULL;
+    sai_mirror_porttype_t   porttype;
+    sai_mirror_portid_t     portid;
 
     if (NULL == bundle) {
         return;
@@ -2045,6 +2051,36 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
     ERRNO_LOG(status,
               "Failed to remove router interface configuration (bundle: %s)",
               bundle->name);
+
+    if (bundle->ingress_owner) {
+        __mirror_get_bundle_port_info(bundle, &porttype, &portid);
+        if (list_size(&bundle->ports)) {
+            ops_sai_mirror_src_del(bundle->ingress_owner->hid,
+                    SAI_MIRROR_DATA_DIR_INGRESS, porttype, portid);
+        }
+
+        bundle->ingress_owner = NULL;
+        list_remove(&bundle->ingress_node);
+        list_init(&bundle->ingress_node);
+    }
+
+    if (bundle->egress_owner) {
+         __mirror_get_bundle_port_info(bundle, &porttype, &portid);
+        if (list_size(&bundle->ports)) {
+            ops_sai_mirror_src_del(bundle->egress_owner->hid,
+                    SAI_MIRROR_DATA_DIR_EGRESS, porttype, portid);
+        }
+
+        bundle->egress_owner = NULL;
+        list_remove(&bundle->egress_node);
+        list_init(&bundle->egress_node);
+    }
+
+    if (__is_mirror_output_bundle(&bundle->ofproto->up, bundle->aux)) {
+        HMAP_FOR_EACH_SAFE(mir, n_mir, hmap_node, &bundle->ofproto->mirrors) {
+            __ofmirror_destroy(mir, 1);
+        }
+    }
 
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
         status = __ofbundle_port_del(port);
@@ -2486,7 +2522,7 @@ __mirror_set(struct ofproto *ofproto_,
     struct ofproto_mirror_bundle {
         struct ofproto *ofproto;
         void *aux;
-    } *msrcs, *mdsts;
+    } *msrcs, *mdsts, *mout;
 
     struct ofproto_sai *ofproto;
     struct ofmirror_sai *mirror;
@@ -2509,8 +2545,13 @@ __mirror_set(struct ofproto *ofproto_,
         VLOG_INFO("mirror not exist, create it");
         mirror = __ofmirror_create(ofproto, aux, s);
     } else {
-        VLOG_INFO("mirror disassociate all source ports");
-        __ofmirror_destroy(mirror, 0);
+        mout = (struct ofproto_mirror_bundle *)(s->out_bundle);
+        t = __ofbundle_lookup(__ofproto_sai_cast(mout->ofproto), mout->aux);
+        if (mirror->out != t) {
+            __ofmirror_destroy(mirror, 1);
+            mirror = __ofmirror_create(ofproto, aux, s);
+        } else
+            __ofmirror_destroy(mirror, 0);
     }
 
     /* srcs is a pointer to an array of N *ofproto,*aux tuples */
@@ -2567,41 +2608,42 @@ __mirror_get_stats(struct ofproto *ofproto,
     struct netdev_stats stats;
     const struct ofport_sai *port;
     uint32_t		hw_id;
-    int	                found;
 
     mirror = __ofmirror_lookup(__ofproto_sai_cast(ofproto), aux);
-    if (!mirror) return -1;
+    if (!mirror) goto err;
 
     /*
      * Since sai-port->stats_get() function accepts only physical port
      * id (not accept lag id), we should extract physical port's id from
-     * lag manually, we just need to get the first member port
+     * lag manually, we just need to get all member ports' stats
      */
-    found = 1;
+    *packets = *bytes = 0;
     if (bundle_is_a_lag(mirror->out)) {
         LIST_FOR_EACH(port, bundle_node, &mirror->out->ports) {
             hw_id = netdev_sai_hw_id_get(port->up.netdev);
-            break;
+            if (ops_sai_port_stats_get(hw_id, &stats))
+                goto err;
+
+            *packets += stats.tx_packets;
+            *bytes += stats.tx_bytes;
         }
-        if (&port->bundle_node == &mirror->out->ports)
-            found = 0;
     } else {
         hw_id = mirror->out_portid.hw_id;
+        if (ops_sai_port_stats_get(hw_id, &stats))
+            goto err;
+
+        *packets = stats.tx_packets;
+        *bytes = stats.tx_bytes;
     }
 
-    if (!found) return -1;
-
-    if (ops_sai_port_stats_get(hw_id, &stats))
-        return -1;
-
-    *packets = stats.tx_packets - mirror->tx_base_packets;
-    *bytes = stats.tx_bytes - mirror->tx_base_bytes;
-
-    VLOG_DBG("returning stats for mirror %s "
-            "tx packets %"PRIu64", bytes %"PRIu64"",
-            mirror->name, *packets, *bytes);
+    *packets -= mirror->tx_base_packets;
+    *bytes -= mirror->tx_base_bytes;
 
     return 0;
+
+err:
+    *packets = *bytes = -1;
+    return -1;
 }
 
 static bool
