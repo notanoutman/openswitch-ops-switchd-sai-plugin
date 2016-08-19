@@ -969,6 +969,7 @@ static int
 __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
 {
     int status = 0;
+    handle_t	portid = HANDLE_INITIALIZAER;
     uint32_t hw_id = netdev_sai_hw_id_get(port->up.netdev);
 
     if (NULL == port) {
@@ -1009,6 +1010,8 @@ __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
     {
         status = ops_sai_lag_member_port_add(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
         ERRNO_LOG_EXIT(status, "Failed to add lag member port to bundle");
+	 portid.data = netdev_sai_hw_id_get(port->up.netdev);
+        ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, portid,0);
     }
 
 exit:
@@ -1233,6 +1236,7 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
     static unsigned long added_trunks[BITMAP_N_LONGS(VLAN_BITMAP_SIZE)];
     static unsigned long common_trunks[BITMAP_N_LONGS(VLAN_BITMAP_SIZE)];
     static unsigned long removed_trunks[BITMAP_N_LONGS(VLAN_BITMAP_SIZE)];
+    handle_t			portid = HANDLE_INITIALIZAER;
 
     /* Initialize all trunks as empty. */
     bitmap_and(added_trunks, empty_trunks, VLAN_BITMAP_SIZE);
@@ -1372,6 +1376,14 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
 
     default:
         ovs_assert(false);
+    }
+
+    if(-1 != bundle->bond_hw_handle)
+    {
+        if(tag_changed || mod_changed){
+		 ops_sai_lag_get_handle_id(bundle->bond_hw_handle, &portid);
+	        ops_sai_fdb_flush_entrys(3 /*L2MAC_FLUSH_BY_TRUNK*/, portid,0);
+	 }
     }
 
     bundle->vlan = s->vlan;
@@ -1577,6 +1589,8 @@ __ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
         if(strncmp(s->name,"lag",3) == 0) {
             __ofbundle_lag_intf_mac_reconfigure(s->name);
         }
+
+	 ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, handle,0);
     }
 
     if (bundle->router_intf.created &&

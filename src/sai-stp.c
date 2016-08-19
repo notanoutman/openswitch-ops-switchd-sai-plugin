@@ -88,15 +88,18 @@ __stp_get_port_state_2_hw_port_state(int port_state, sai_port_stp_port_state_t *
 
     switch (port_state) {
         case MSTP_INST_PORT_STATE_BLOCKED:
-            *hw_port_state = SAI_PORT_STP_STATE_BLOCKING;
+	     *hw_port_state = SAI_PORT_STP_STATE_FORWARDING;
+//            *hw_port_state = SAI_PORT_STP_STATE_BLOCKING;
             retval = true;
             break;
         case MSTP_INST_PORT_STATE_DISABLED:
-            *hw_port_state = SAI_PORT_STP_STATE_BLOCKING;
+	     *hw_port_state = SAI_PORT_STP_STATE_FORWARDING;
+//            *hw_port_state = SAI_PORT_STP_STATE_BLOCKING;
             retval = true;
             break;
         case MSTP_INST_PORT_STATE_LEARNING:
-            *hw_port_state = SAI_PORT_STP_STATE_LEARNING;
+	     *hw_port_state = SAI_PORT_STP_STATE_FORWARDING;
+//            *hw_port_state = SAI_PORT_STP_STATE_LEARNING;
             retval = true;
             break;
         case MSTP_INST_PORT_STATE_FORWARDING:
