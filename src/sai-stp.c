@@ -16,6 +16,8 @@
 #include <sai-api-class.h>
 #include <sai-stp.h>
 
+#include "unixctl.h"
+
 VLOG_DEFINE_THIS_MODULE(sai_stp);
 
 typedef enum mstp_instance_port_state {
@@ -46,6 +48,61 @@ static  int __stp_set_port_state(int,uint32_t,int);
 static  int __stp_get_port_state(int,uint32_t,int*);
 static  int __stp_get_default_instance(int*);
 
+static struct hstp_entry*
+__stp_entry_hmap_find_create(struct hmap *hstp_hmap, int stpid, bool is_create);
+
+void
+__stp_instance_dump_data(struct ds *ds, struct hstp_entry   *hstp_entry)
+{
+     if(!hstp_entry || !ds) {
+        VLOG_ERR("%s: invalid param object", __FUNCTION__);
+        return;
+    }
+
+
+    /* display instance data*/
+    ds_put_format(ds, "Instance %d:\n", hstp_entry->stpid);
+    ds_put_format(ds, "Instance handle_t id 0x%lx:\n", hstp_entry->handle.data);
+    ds_put_format(ds, "\n");
+}
+
+
+static void
+__stp_plugin_dump_data(struct ds *ds, int argc, const char *argv[])
+{
+    struct hstp_entry   *hstp_entry = NULL;
+    struct hstp_entry   *next_hstp_entry = NULL;
+
+    if (argc > 1) {
+        int inst_id = strtol(argv[1], NULL, 10);
+        hstp_entry = __stp_entry_hmap_find_create(&all_stp, inst_id, true);
+
+        if (NULL == hstp_entry) {
+            ds_put_format(ds, "instance %s not configured\n", argv[1]);
+            return;
+        }
+        __stp_instance_dump_data(ds, hstp_entry);
+    }
+    else {
+       /* parse the instance id */
+        HMAP_FOR_EACH_SAFE (hstp_entry, next_hstp_entry, hmap_node, &all_stp) {
+                 __stp_instance_dump_data(ds, hstp_entry);
+        }
+    }
+}
+
+
+static void
+__stp_unixctl_show(struct unixctl_conn *conn, int argc,
+                  const char *argv[], void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    __stp_plugin_dump_data(&ds, argc, argv);
+    unixctl_command_reply(conn, ds_cstr(&ds));
+    ds_destroy(&ds);
+}
+
 static int
 __stp_idle_index_init(unsigned long **bitmap_index)
 {
@@ -53,6 +110,9 @@ __stp_idle_index_init(unsigned long **bitmap_index)
     *bitmap_index = bitmap_allocate1(SHRT_MAX);
 
     bitmap_set0(*bitmap_index, 0);           /* skip index 0 */
+
+    unixctl_command_register("sai/stp/show", "[instance-id]", 0, 1,
+                             __stp_unixctl_show, NULL);
 
     return 0;
 }
@@ -88,18 +148,15 @@ __stp_get_port_state_2_hw_port_state(int port_state, sai_port_stp_port_state_t *
 
     switch (port_state) {
         case MSTP_INST_PORT_STATE_BLOCKED:
-	     *hw_port_state = SAI_PORT_STP_STATE_FORWARDING;
-//            *hw_port_state = SAI_PORT_STP_STATE_BLOCKING;
+            *hw_port_state = SAI_PORT_STP_STATE_BLOCKING;
             retval = true;
             break;
         case MSTP_INST_PORT_STATE_DISABLED:
 	     *hw_port_state = SAI_PORT_STP_STATE_FORWARDING;
-//            *hw_port_state = SAI_PORT_STP_STATE_BLOCKING;
             retval = true;
             break;
         case MSTP_INST_PORT_STATE_LEARNING:
-	     *hw_port_state = SAI_PORT_STP_STATE_FORWARDING;
-//            *hw_port_state = SAI_PORT_STP_STATE_LEARNING;
+            *hw_port_state = SAI_PORT_STP_STATE_LEARNING;
             retval = true;
             break;
         case MSTP_INST_PORT_STATE_FORWARDING:

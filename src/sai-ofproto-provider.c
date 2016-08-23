@@ -2096,6 +2096,15 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
         }
     }
 
+    if (bundle->bond_hw_handle != -1) {
+	 LIST_FOR_EACH_SAFE(port, next_port, bundle_tx_lag_node, &bundle->tx_number_ports) {
+            status = __ofbundle_lag_tx_port_del(port);
+            ERRNO_LOG(status,
+                      "Failed to remove bundle tx port configuration (bundle: %s)",
+                      bundle->name);
+        }
+    }
+
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
         status = __ofbundle_port_del(port);
         ERRNO_LOG(status,
@@ -2104,7 +2113,7 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
     }
 
     if (bundle->bond_hw_handle != -1) {
-	ops_sai_lag_get_handle_id(bundle->bond_hw_handle,&handle);
+	 ops_sai_lag_get_handle_id(bundle->bond_hw_handle,&handle);
         ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, handle,bundle->vlan);
 
         ops_sai_lag_remove(bundle->bond_hw_handle);
@@ -2328,6 +2337,11 @@ __bundle_remove(struct ofport *port_)
 
     if (NULL == bundle) {
         return;
+    }
+
+    if (bundle->bond_hw_handle != -1) {
+        status = __ofbundle_lag_tx_port_del(port);
+        ERRNO_LOG(status,"Failed to remove tx bundle");
     }
 
     status = __ofbundle_port_del(port);
