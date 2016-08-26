@@ -47,9 +47,7 @@ struct route_class {
      * @return errno if operation failed.*/
     int  (*local_add)(const handle_t *vrid,
                       const char     *prefix,
-                      const handle_t *rifid,
-                      uint32_t           next_hop_count,
-                      char *const *const next_hops);
+                      const handle_t *rifid);
 
     /**
      *  Function for adding next hops(list of remote routes) which are accessible
@@ -133,6 +131,7 @@ typedef struct sai_ops_route_s
     char        *prefix;
     struct      hmap nexthops;              /* list of selected next hops */
     uint8_t     n_nexthops;                 /* number of nexthops */
+    uint8_t     refer_cnt;                 /* refer counts for route with nexthop of interface */
     enum        ops_route_state rstate;     /* state of route */
     handle_t    nh_ecmp;                   /* next hop index ecmp*/
 }sai_ops_route_t;
@@ -175,12 +174,10 @@ ops_sai_route_ip_to_me_delete(const handle_t *vrid, const char *prefix)
 static inline int
 ops_sai_route_local_add(const handle_t *vrid,
                         const char     *prefix,
-                        const handle_t *rifid,
-                        uint32_t           next_hop_count,
-                        char *const *const next_hops)
+                        const handle_t *rifid)
 {
     ovs_assert(ops_sai_route_class()->local_add);
-    return ops_sai_route_class()->local_add(vrid, prefix, rifid, next_hop_count, next_hops);
+    return ops_sai_route_class()->local_add(vrid, prefix, rifid);
 }
 
 static inline int
@@ -212,21 +209,6 @@ ops_sai_route_remove(const handle_t *vrid, const char     *prefix)
     ovs_assert(ops_sai_route_class()->remove);
     return ops_sai_route_class()->remove(vrid, prefix);
 }
-
-static inline int
-ops_sai_route_if_addr_add(const handle_t *vrid, const char *prefix, const char *ifname)
-{
-    ovs_assert(ops_sai_route_class()->if_addr_add);
-    return ops_sai_route_class()->if_addr_add(vrid, prefix, ifname);
-}
-
-static inline int
-ops_sai_route_if_addr_delete(const handle_t *vrid, const char *prefix, const char *ifname)
-{
-    ovs_assert(ops_sai_route_class()->if_addr_delete);
-    return ops_sai_route_class()->if_addr_delete(vrid, prefix, ifname);
-}
-
 
 static inline void
 ops_sai_route_deinit(void)

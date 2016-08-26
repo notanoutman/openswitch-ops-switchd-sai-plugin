@@ -425,6 +425,7 @@ ops_sai_route_add(int vrf, const char *prefix, uint32_t nh_count, char *const *c
     routep->vrf = vrf;
     routep->prefix = xstrdup(prefix);
     routep->n_nexthops = 0;
+    routep->refer_cnt = 0;
 
     hmap_init(&routep->nexthops);
 
@@ -562,7 +563,7 @@ ops_sai_routing_nexthop_create(const handle_t *rif, const char* prefix, handle_t
     memset(buf, 0, sizeof(buf));
     retv = inet_pton(AF_INET, prefix, buf);
     if (!retv) {
-        VLOG_DBG("Invaild prefix %s", prefix);
+        VLOG_ERR("Invaild prefix %s", prefix);
         return status;
     }
     memcpy(&ip_prefix, buf, sizeof(ip_prefix));
@@ -732,104 +733,81 @@ exit:
 }
 
 static int
-__route_if_addr_add(const handle_t *vrid, const char *prefix, const char *ifname)
+__ops_sai_route_local_add(const handle_t *vrid, const char *prefix)
 {
-    struct if_addr  *p_if_addr = NULL;
-    struct if_addr  *pst_if_addr = NULL;
-    char            *prefix_cp = NULL;
-    int             rc  = 0;
-    char            prefix_mask[64];
-    char            buf[64];
-    char            buf_mask[64];
-    uint32_t        ip_prefix = 0;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    sai_unicast_route_entry_t route;
+    sai_attribute_t attr[2];
+    uint32_t    ip_prefix = 0;
+    char        buf_preifx[256];
+    int         rc = 0;
     uint8_t         prefix_len;
-    uint32_t        mask = 0;
+    sai_status_t    status = SAI_STATUS_SUCCESS;
 
-    p_if_addr = xzalloc(sizeof(*p_if_addr));
-    if (NULL == p_if_addr) {
-        return 1;
-    }
+    memset(&route, 0, sizeof(route));
+    memset(attr, 0, sizeof(attr));
+    memset(buf_preifx, 0, sizeof(buf_preifx));
 
-    memset(prefix_mask, 0, sizeof(prefix_mask));
-    memset(buf, 0, sizeof(buf));
-    memset(buf_mask, 0, sizeof(buf_mask));
+    attr[0].id = SAI_ROUTE_ATTR_PACKET_ACTION;
+    attr[0].value.s32 = SAI_PACKET_ACTION_TRAP;
 
-    memcpy(prefix_mask, prefix, sizeof(prefix_mask));
-    rc = ops_string_to_prefix(prefix_mask, &ip_prefix, &prefix_len);
+    attr[1].id = SAI_ROUTE_ATTR_TRAP_PRIORITY;
+    attr[1].value.u8 = 0;              // default to zero
+
+    memcpy(buf_preifx, prefix, sizeof(buf_preifx));
+    rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
     if (rc)
     {
-        VLOG_DBG("Invalid IPv4/Prefix");
+        VLOG_ERR("Invalid IPv4/Prefix");
         return rc; /* Return error */
     }
 
-    ip_prefix = htonl(ip_prefix);
-    SAI_IPV4_LEN_TO_MASK(mask, prefix_len);
-    ip_prefix = ip_prefix & mask;
-    ip_prefix = htonl(ip_prefix);
-    inet_ntop (AF_INET, &ip_prefix, buf, sizeof(buf));
+    route.vr_id = vrid->data;
+    route.destination.addr_family = SAI_IP_ADDR_FAMILY_IPV4;
+    route.destination.addr.ip4 = htonl(ip_prefix);
+    SAI_IPV4_LEN_TO_MASK(route.destination.mask.ip4, prefix_len);
 
-    snprintf(buf_mask, sizeof(buf_mask), "/%d", prefix_len);
-    strcat(buf, buf_mask);
+    status = sai_api->route_api->create_route(&route, 2, attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to add route entry");
 
-    p_if_addr->prefix = xstrdup(buf);
-    p_if_addr->ifname = xstrdup(ifname);
-    //memcpy(p_if_addr->ifname, ifname, sizeof(p_if_addr->ifname));
-    prefix_cp = xstrdup(prefix);
-
-    pst_if_addr = if_addr_hmap_find_by_prefix(&all_if_addr, prefix_cp);
-    if (NULL == pst_if_addr)
-    {
-        if_addr_hmap_add(&all_if_addr, p_if_addr);
-    }
-
-    free(prefix_cp);
-    return 0;
+exit:
+    return rc;
 }
 
 static int
-__route_if_addr_delete(const handle_t *vrid, const char *prefix, const char *ifname)
+__ops_sai_route_local_delete(const handle_t *vrid, const char *prefix)
 {
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
-    struct if_addr* pst_if_addr = NULL;
-    int             rc  = 0;
-    char            prefix_mask[64];
-    char            buf[64];
-    char            buf_mask[64];
-    uint32_t        ip_prefix = 0;
+    sai_unicast_route_entry_t route;
+    uint32_t    ip_prefix = 0;
+    char        buf_preifx[256];
+    int         rc = 0;
     uint8_t         prefix_len;
-    char            *prefix_cp = NULL;
-    uint32_t        mask = 0;
+    sai_status_t    status = SAI_STATUS_SUCCESS;
 
-    memset(prefix_mask, 0, sizeof(prefix_mask));
-    memset(buf, 0, sizeof(buf));
-    memset(buf_mask, 0, sizeof(buf_mask));
+    memset(&route, 0, sizeof(route));
+    memset(buf_preifx, 0, sizeof(buf_preifx));
 
-    memcpy(prefix_mask, prefix, sizeof(prefix_mask));
-    rc = ops_string_to_prefix(prefix_mask, &ip_prefix, &prefix_len);
+    memcpy(buf_preifx, prefix, sizeof(buf_preifx));
+    rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
     if (rc)
     {
-        VLOG_DBG("Invalid IPv4/Prefix");
+        VLOG_ERR("Invalid IPv4/Prefix");
         return rc; /* Return error */
     }
 
-    ip_prefix = htonl(ip_prefix);
-    SAI_IPV4_LEN_TO_MASK(mask, prefix_len);
-    ip_prefix = ip_prefix & mask;
-    ip_prefix = htonl(ip_prefix);
-    inet_ntop (AF_INET, &ip_prefix, buf, sizeof(buf));
+    route.vr_id = vrid->data;
+    route.destination.addr_family = SAI_IP_ADDR_FAMILY_IPV4;
+    route.destination.addr.ip4 = htonl(ip_prefix);
+    SAI_IPV4_LEN_TO_MASK(route.destination.mask.ip4, prefix_len);
 
-    snprintf(buf_mask, sizeof(buf_mask), "/%d", prefix_len);
-    strcat(buf, buf_mask);
-    prefix_cp = xstrdup(buf);
-    pst_if_addr = if_addr_hmap_find_by_prefix(&all_if_addr, prefix_cp);
-    if (NULL != pst_if_addr)
-    {
-        if_addr_hmap_delete(&all_if_addr, pst_if_addr);
-    }
+    status = sai_api->route_api->remove_route(&route);
+    SAI_ERROR_LOG_EXIT(status, "Failed to remove route entry");
 
-    free(prefix_cp);
-    prefix_cp = NULL;
-    return 0;
+exit:
+    return rc;
 }
 
 /*
@@ -878,7 +856,7 @@ __route_ip_to_me_add(const handle_t *vrid, const char *prefix)
     rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
     if (rc)
     {
-        VLOG_DBG("Invalid IPv4/Prefix");
+        VLOG_ERR("Invalid IPv4/Prefix");
         return rc; /* Return error */
     }
 
@@ -912,7 +890,7 @@ __route_ip_to_me_delete(const handle_t *vrid, const char *prefix)
     rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
     if (rc)
     {
-        VLOG_DBG("Invalid IPv4/Prefix");
+        VLOG_ERR("Invalid IPv4/Prefix");
         return rc; /* Return error */
     }
 
@@ -961,7 +939,7 @@ __sai_route_local_action(uint64_t          vrid,
     memcpy(buf_preifx, prefix, sizeof(buf_preifx));
     rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
     if (rc) {
-        VLOG_DBG("Invalid IPv4/Prefix");
+        VLOG_ERR("Invalid IPv4/Prefix");
         return rc; /* Return error */
     }
 
@@ -1121,6 +1099,7 @@ __sai_route_remote_action(uint64_t          vrid,
     uint8_t             prefix_len  = 0;
     int                 rc          = 0;
     int                 vrf_id      = 0;
+    handle_t            vrfid;
 
     memset(buf_preifx, 0, sizeof(buf_preifx));
     memset(&l3_egress_id, 0, sizeof(l3_egress_id));
@@ -1129,10 +1108,11 @@ __sai_route_remote_action(uint64_t          vrid,
     memcpy(buf_preifx, prefix, sizeof(buf_preifx));
     rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
     if (rc) {
-        VLOG_DBG("Invalid IPv4/Prefix");
+        VLOG_ERR("Invalid IPv4/Prefix");
         return rc; /* Return error */
     }
 
+    vrfid.data = vrid;
     memset(&route, 0, sizeof(route));
     route.vr_id = vrid;
     route.destination.addr_family = SAI_IP_ADDR_FAMILY_IPV4;
@@ -1191,48 +1171,108 @@ __sai_route_remote_action(uint64_t          vrid,
 
                 status = sai_api->route_api->create_route(&route, 3, attr);
                 SAI_ERROR_LOG_EXIT(status, "Failed to add route entry");
-
             }
         } else {
-            /* update to ecmp  */
-            rc = ops_sai_route_update(vrf_id, ops_routep, next_hop_count, next_hops, false);
-            if (rc) {
-                goto exit;
-            }
+            /* for support the route with intf nexthop */
 
-            HMAP_FOR_EACH(ops_nh, node, &ops_routep->nexthops)
+            if (0 == ops_routep->n_nexthops && ops_routep->refer_cnt)
             {
-                /* need to add nexthop db or update refer cnt */
-                p_nh_entry = ops_sai_route_get_nexthop(ops_nh->id);
-                if (NULL == p_nh_entry) {
-                    rc = ops_sai_routing_nexthop_create(NULL, ops_nh->id, &l3_egress_id);
-                    if (rc) {
-                        continue;
-                    }
-                } else {
-                    l3_egress_id.data = p_nh_entry->handle.data;
+                //ops_routep = ops_sai_route_add(vrf_id, prefix, next_hop_count, next_hops);
+                rc = ops_sai_route_update(vrf_id, ops_routep, next_hop_count, next_hops, false);
+                if (rc) {
+                    goto exit;
                 }
 
-                /* add the nexthop db or refer  */
-                for(index = 0; index < next_hop_count; index++)
-                {
-                    if (0 == strcmp(ops_nh->id, next_hops[index])) {
+                if (1 == ops_routep->n_nexthops) {
+                    p_nh_entry = ops_sai_route_get_nexthop(next_hops[0]);
+                    if (NULL == p_nh_entry) {
+                        rc = ops_sai_routing_nexthop_create(NULL, next_hops[0], &l3_egress_id);
+                        if (rc) {
+                            return status;
+                        }
+                    }else {
+                        l3_egress_id.data = p_nh_entry->handle.data;
+                    }
+
+                    ops_sai_route_add_nexthop(next_hops[0], &l3_egress_id);
+                    l3_id_cp.data = l3_egress_id.data;
+
+                } else if (1 <= ops_routep->n_nexthops) {
+                    HMAP_FOR_EACH(ops_nh, node, &ops_routep->nexthops) {
+                        /* need to add nexthop db or update refer cnt */
+                        p_nh_entry = ops_sai_route_get_nexthop(ops_nh->id);
+                        if (NULL == p_nh_entry) {
+                            rc = ops_sai_routing_nexthop_create(NULL, ops_nh->id, &l3_egress_id);
+                            if (rc) {
+                                continue;
+                                /* continue to add the rest of nexthops */
+                            }
+                        }else {
+                            l3_egress_id.data = p_nh_entry->handle.data;
+                        }
+
                         ops_sai_route_add_nexthop(ops_nh->id, &l3_egress_id);
                     }
+
+                    /* create nexthop group */
+                    ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
+                    ops_routep->nh_ecmp.data = l3_nhg_id.data;
+                    l3_id_cp.data = l3_nhg_id.data;
                 }
+
+                /* next comes routes adding */
+                attr[0].id = SAI_ROUTE_ATTR_PACKET_ACTION;
+                attr[0].value.s32 = SAI_PACKET_ACTION_FORWARD;
+                attr[1].id = SAI_ROUTE_ATTR_NEXT_HOP_ID;
+                attr[1].value.oid = l3_id_cp.data;
+                attr[2].id = SAI_ROUTE_ATTR_TRAP_PRIORITY;
+                attr[2].value.u8 = 0;                       // default to zero
+
+                status = sai_api->route_api->create_route(&route, 3, attr);
+                SAI_ERROR_LOG_EXIT(status, "Failed to add route entry");
             }
+            else if (ops_routep->n_nexthops)
+            {
+                /* update to ecmp  */
+                rc = ops_sai_route_update(vrf_id, ops_routep, next_hop_count, next_hops, false);
+                if (rc) {
+                    goto exit;
+                }
 
-            /* create nexthop group */
-            ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
+                HMAP_FOR_EACH(ops_nh, node, &ops_routep->nexthops)
+                {
+                    /* need to add nexthop db or update refer cnt */
+                    p_nh_entry = ops_sai_route_get_nexthop(ops_nh->id);
+                    if (NULL == p_nh_entry) {
+                        rc = ops_sai_routing_nexthop_create(NULL, ops_nh->id, &l3_egress_id);
+                        if (rc) {
+                            continue;
+                        }
+                    } else {
+                        l3_egress_id.data = p_nh_entry->handle.data;
+                    }
 
-            ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
+                    /* add the nexthop db or refer  */
+                    for(index = 0; index < next_hop_count; index++)
+                    {
+                        if (0 == strcmp(ops_nh->id, next_hops[index])) {
+                            ops_sai_route_add_nexthop(ops_nh->id, &l3_egress_id);
+                        }
+                    }
+                }
 
-            /* need to update the route nhid before delete the nhg before */
-            if (OPS_ROUTE_STATE_ECMP == ops_routep->rstate) {
-                ops_sai_routing_nh_group_del(&ops_routep->nh_ecmp);
+                /* create nexthop group */
+                ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
+
+                ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
+
+                /* need to update the route nhid before delete the nhg before */
+                if (OPS_ROUTE_STATE_ECMP == ops_routep->rstate) {
+                    ops_sai_routing_nh_group_del(&ops_routep->nh_ecmp);
+                }
+
+                ops_routep->nh_ecmp.data = l3_nhg_id.data;
             }
-
-            ops_routep->nh_ecmp.data = l3_nhg_id.data;
         }
     } else {
         ops_routep = ops_sai_route_lookup(vrf_id, prefix);
@@ -1241,7 +1281,7 @@ __sai_route_remote_action(uint64_t          vrid,
         }
 
         if (next_hops) {
-           ops_sai_route_update(vrf_id, ops_routep, next_hop_count, next_hops, true);
+            ops_sai_route_update(vrf_id, ops_routep, next_hop_count, next_hops, true);
             if (1 == ops_routep->n_nexthops) {
                 HMAP_FOR_EACH(ops_nh, node, &ops_routep->nexthops)
                 {
@@ -1272,6 +1312,10 @@ __sai_route_remote_action(uint64_t          vrid,
                 }
 
                 ops_routep->nh_ecmp.data = l3_nhg_id.data;
+            } else if (ops_routep->refer_cnt) {
+                /* del the ipuc prefix */
+                status = sai_api->route_api->remove_route(&route);
+                __ops_sai_route_local_add(&vrfid, prefix);
             }
 
             /* del the nexthop db or refer  */
@@ -1339,66 +1383,27 @@ exit:
 static int
 __route_local_add(const handle_t *vrid,
                   const char     *prefix,
-                  const handle_t *rifid,
-                  uint32_t           next_hop_count,
-                  char *const *const next_hops)
+                  const handle_t *rifid)
 {
     sai_status_t    status      = SAI_STATUS_SUCCESS;
-    uint32_t        cmd_add     = true;
-    int             is_connect      = false;
-    char            *buf_preifx2    = NULL;
-    struct if_addr  *pst_if_addr    = NULL;
-    int             index           = 0;
-    char            *nh_connect[next_hop_count];
-    char            *buf_preifx[next_hop_count];
-    char            *buf_nh[next_hop_count];
+    int                 vrf_id      = 0;
+    sai_ops_route_t     *ops_routep = NULL;
 
-
-    buf_preifx2 = xstrdup(prefix);
-    pst_if_addr = if_addr_hmap_find_by_prefix(&all_if_addr, buf_preifx2);
-    if (NULL != pst_if_addr) {
-        is_connect = true;
-    }
-
-    char *pefix_connect[1];
-    pefix_connect[0] = strtok(buf_preifx2, "/");
-    if (!is_connect) {
-        for (index = 0; index < next_hop_count; index ++) {
-            buf_nh[index] = xstrdup(next_hops[index]);
-
-            pst_if_addr = if_addr_hmap_find_by_ifname(&all_if_addr, buf_nh[index]);
-            if (NULL == pst_if_addr) {
-                buf_preifx[index] = NULL;
-                nh_connect[index] = NULL;
-                continue;
-            } else {
-                buf_preifx[index] = xstrdup(pst_if_addr->prefix);
-                nh_connect[index] = strtok(buf_preifx[index], "/");
-            }
+    ops_routep = ops_sai_route_lookup(vrf_id, prefix);
+    if (NULL == ops_routep) {
+        ops_routep = ops_sai_route_add(vrf_id, prefix, 0, NULL);
+        if (NULL != ops_routep) {
+            ops_routep->refer_cnt = 1;
+        } else {
+            return status;
         }
 
-        status = __sai_route_remote_action(vrid->data, prefix, next_hop_count, nh_connect, cmd_add);
+        __ops_sai_route_local_add(vrid, prefix);
+        /* need to check when mask is 32 */
 
-        for (index = 0; index < next_hop_count; index ++) {
-            if (buf_nh[index]) {
-                free(buf_nh[index]);
-                buf_nh[index] = NULL;
-            }
-
-            if (buf_preifx[index]) {
-                free(buf_preifx[index]);
-                buf_preifx[index] = NULL;
-            }
-        }
     } else {
-        status = __sai_route_local_action(vrid->data, prefix, 1, pefix_connect, cmd_add);
+        ops_routep->refer_cnt++;
     }
-
-    SAI_ERROR_LOG_EXIT(status, "Failed to add local route (prefix: %s)", prefix);
-
-exit:
-    free(buf_preifx2);
-    buf_preifx2 = NULL;
 
     return status;
 }
@@ -1464,41 +1469,9 @@ __route_remote_nh_remove(handle_t           vrid,
 {
     sai_status_t    status = SAI_STATUS_SUCCESS;
     uint32_t        cmd_add = false;
-    int             is_connect  = false;
 
-    int             index = 0;
-    char *nh_connect[next_hop_count];
-    struct if_addr* pst_if_addr = NULL;
-    char        *buf_preifx[next_hop_count];
-
-    for (index = 0; index < next_hop_count; index ++) {
-        pst_if_addr = if_addr_hmap_find_by_ifname(&all_if_addr, next_hops[index]);
-        if (NULL == pst_if_addr) {
-            buf_preifx[index] = NULL;
-            nh_connect[index] = NULL;
-            continue;
-        } else {
-            is_connect = true;
-        }
-
-        buf_preifx[index] = xstrdup(pst_if_addr->prefix);
-        nh_connect[index] = strtok(buf_preifx[index], "/");
-    }
-
-    if (is_connect) {
-        status = __sai_route_local_action(vrid.data, prefix, next_hop_count,
-                                       nh_connect, cmd_add);
-    } else {
-        status = __sai_route_remote_action(vrid.data, prefix, next_hop_count,
-                                       next_hops, cmd_add);
-    }
-
-    for (index = 0; index < next_hop_count; index ++) {
-        if (buf_preifx[index]) {
-            free(buf_preifx[index]);
-            buf_preifx[index] = NULL;
-        }
-    }
+    status = __sai_route_remote_action(vrid.data, prefix, next_hop_count,
+                                   next_hops, cmd_add);
 
     return status;
 }
@@ -1517,34 +1490,41 @@ __route_remote_nh_remove(handle_t           vrid,
 static int
 __route_remove(const handle_t *vrid, const char     *prefix)
 {
-    sai_status_t    status          = SAI_STATUS_SUCCESS;
-    uint32_t        cmd_add         = false;
-    int             is_connect      = false;
-    uint32_t        next_hop_count  = 1;
-    struct if_addr  *pst_if_addr    = NULL;
-    char            *buf_preifx     = NULL;
-    char            *nh_connect[1];
+    sai_status_t        status          = SAI_STATUS_SUCCESS;
+    uint32_t            cmd_add         = false;
+    int                 vrf_id          = 0;
+    sai_ops_route_t     *ops_routep     = NULL;
 
     if (NULL == vrid || NULL == prefix)
     {
         return SAI_STATUS_FAILURE;
     }
 
-    buf_preifx = xstrdup(prefix);
-    pst_if_addr = if_addr_hmap_find_by_prefix(&all_if_addr, buf_preifx);
-    if (NULL != pst_if_addr) {
-        is_connect = true;
+    ops_routep = ops_sai_route_lookup(vrf_id, prefix);
+    if (NULL != ops_routep) {
+        if (ops_routep->refer_cnt) {
+            if (ops_routep->n_nexthops) {
+                if (1 <= ops_routep->refer_cnt) {
+                    ops_routep->refer_cnt --;
+                }
+            } else {
+                /* For route without nexthop of intf, and local multipath */
+                if (1 < ops_routep->refer_cnt) {
+                    ops_routep->refer_cnt --;
+                } else if (1 == ops_routep->refer_cnt) {
+                    /* for delete the local route */
+                    __ops_sai_route_local_delete(vrid, prefix);
+                    ops_sai_route_del(ops_routep);
+                }
+            }
+        } else {
+            if (ops_routep->n_nexthops) {
+                /* for delete the remote route and nexthop  */
+                status = __sai_route_remote_action(vrid->data, prefix, 0, NULL, cmd_add);
+            }
+        }
     }
 
-    nh_connect[0] = strtok(buf_preifx, "/");
-    if (is_connect) {
-        status = __sai_route_local_action(vrid->data, prefix, next_hop_count, nh_connect, cmd_add);
-    } else {
-        status = __sai_route_remote_action(vrid->data, prefix, 0, NULL, cmd_add);
-    }
-
-    free(buf_preifx);
-    buf_preifx = NULL;
     return status;
 }
 
@@ -1565,8 +1545,6 @@ DEFINE_GENERIC_CLASS(struct route_class, route) = {
     .remote_add = __route_remote_add,
     .remote_nh_remove = __route_remote_nh_remove,
     .remove = __route_remove,
-    .if_addr_add = __route_if_addr_add,
-    .if_addr_delete = __route_if_addr_delete,
     .deinit = __route_deinit,
 };
 

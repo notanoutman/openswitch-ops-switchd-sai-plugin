@@ -16,9 +16,15 @@ VLOG_DEFINE_THIS_MODULE(sai_router);
 static void
 __router_init(void)
 {
-    SAI_API_TRACE_NOT_IMPLEMENTED_FN();
-}
+    char    sysctl_name[256];
+    int     rpf_en = 0;
 
+    memset(sysctl_name, 0, sizeof(sysctl_name));
+    snprintf(sysctl_name, sizeof(sysctl_name),
+         "sysctl -w net.ipv4.conf.all.rp_filter=%d > /dev/null",
+         rpf_en);
+    system(sysctl_name);
+}
 /*
  * Creates virtual router.
  *

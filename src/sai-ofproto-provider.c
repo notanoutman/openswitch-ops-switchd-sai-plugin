@@ -234,8 +234,8 @@ static int __ofbundle_ip_secondary_reconfigure(struct ofbundle_sai *,
 static struct ip_address *__ofbundle_ip_secondary_find(struct
                                                        ofbundle_sai *,
                                                        const char *);
-static int __ofproto_ip_add(struct ofproto *, const char *, bool, const char *);
-static int __ofproto_ip_remove(struct ofproto *, const char *, bool, const char *);
+static int __ofproto_ip_add(struct ofproto *, const char *, bool);
+static int __ofproto_ip_remove(struct ofproto *, const char *, bool);
 
 static void __ofbundle_rename(struct ofbundle_sai *, const char *);
 static struct ofbundle_sai *__ofbundle_create(struct ofproto_sai *, void *,
@@ -1699,7 +1699,7 @@ static int __ofbundle_ip_reconfigure(struct ofbundle_sai *bundle,
             if (bundle->ipv4_primary) {
                 status = __ofproto_ip_remove(ofproto,
                                                bundle->ipv4_primary,
-                                               false, bundle->name);
+                                               false);
                 ERRNO_EXIT(status);
 
                 free(bundle->ipv4_primary);
@@ -1709,7 +1709,7 @@ static int __ofbundle_ip_reconfigure(struct ofbundle_sai *bundle,
 
         if (s->ip4_address) {
             /* Add new */
-            status = __ofproto_ip_add(ofproto, s->ip4_address, false, bundle->name);
+            status = __ofproto_ip_add(ofproto, s->ip4_address, false);
             ERRNO_EXIT(status);
 
             bundle->ipv4_primary = xstrdup(s->ip4_address);
@@ -1724,7 +1724,7 @@ static int __ofbundle_ip_reconfigure(struct ofbundle_sai *bundle,
             if (bundle->ipv6_primary) {
                 status = __ofproto_ip_remove(ofproto,
                                                bundle->ipv6_primary,
-                                               true, bundle->name);
+                                               true);
                 ERRNO_EXIT(status);
 
                 free(bundle->ipv6_primary);
@@ -1734,7 +1734,7 @@ static int __ofbundle_ip_reconfigure(struct ofbundle_sai *bundle,
 
         if (s->ip6_address) {
             /* Add new */
-            status = __ofproto_ip_add(ofproto, s->ip6_address, true, bundle->name);
+            status = __ofproto_ip_add(ofproto, s->ip6_address, true);
             ERRNO_EXIT(status);
 
             bundle->ipv6_primary = xstrdup(s->ip6_address);
@@ -1774,7 +1774,7 @@ static int __ofbundle_ip_remove(struct ofbundle_sai *bundle)
 
     /* Unconfigure primary ipv4 address and free */
     if (bundle->ipv4_primary) {
-        status = __ofproto_ip_remove(ofproto, bundle->ipv4_primary, false, bundle->name);
+        status = __ofproto_ip_remove(ofproto, bundle->ipv4_primary, false);
         ERRNO_EXIT(status);
 
         free(bundle->ipv4_primary);
@@ -1782,7 +1782,7 @@ static int __ofbundle_ip_remove(struct ofbundle_sai *bundle)
 
     /* Unconfigure primary ipv6 address and free */
     if (bundle->ipv6_primary) {
-        status = __ofproto_ip_remove(ofproto, bundle->ipv6_primary, true, bundle->name);
+        status = __ofproto_ip_remove(ofproto, bundle->ipv6_primary, true);
         ERRNO_EXIT(status);
 
         free(bundle->ipv6_primary);
@@ -1790,7 +1790,7 @@ static int __ofbundle_ip_remove(struct ofbundle_sai *bundle)
 
     /* Unconfigure secondary ipv4 address and free the hash */
     HMAP_FOR_EACH_SAFE (addr, next, addr_node, &bundle->ipv4_secondary) {
-        status = __ofproto_ip_remove(ofproto, addr->address, false, bundle->name);
+        status = __ofproto_ip_remove(ofproto, addr->address, false);
         ERRNO_EXIT(status);
 
         hmap_remove(&bundle->ipv4_secondary, &addr->addr_node);
@@ -1800,7 +1800,7 @@ static int __ofbundle_ip_remove(struct ofbundle_sai *bundle)
 
     /* Unconfigure secondary ipv6 address and free the hash */
     HMAP_FOR_EACH_SAFE (addr, next, addr_node, &bundle->ipv6_secondary) {
-        status = __ofproto_ip_remove(ofproto, addr->address, true, bundle->name);
+        status = __ofproto_ip_remove(ofproto, addr->address, true);
         ERRNO_EXIT(status);
 
         hmap_remove(&bundle->ipv6_secondary, &addr->addr_node);
@@ -1870,7 +1870,7 @@ static int __ofbundle_ip_secondary_reconfigure(struct ofbundle_sai *bundle,
     /* Delete all removed */
     HMAP_FOR_EACH_SAFE (addr, next, addr_node, bundle_ip_addresses) {
         if (!shash_find_data(&new_ip_hash_map, addr->address)) {
-            status = __ofproto_ip_remove(ofproto, addr->address, false, bundle->name);
+            status = __ofproto_ip_remove(ofproto, addr->address, false);
             ERRNO_EXIT(status);
 
             hmap_remove(bundle_ip_addresses, &addr->addr_node);
@@ -1883,7 +1883,7 @@ static int __ofbundle_ip_secondary_reconfigure(struct ofbundle_sai *bundle,
     SHASH_FOR_EACH (addr_node, &new_ip_hash_map) {
         address = addr_node->data;
         if (!__ofbundle_ip_secondary_find(bundle, address)) {
-            status = __ofproto_ip_add(ofproto, address, false, bundle->name);
+            status = __ofproto_ip_add(ofproto, address, false);
             ERRNO_EXIT(status);
 
             addr = xzalloc(sizeof *addr);
@@ -1941,8 +1941,7 @@ static struct ip_address *__ofbundle_ip_secondary_find(struct
  */
 static int __ofproto_ip_add(struct ofproto *ofproto_,
                             const char *ip,
-                            bool is_ipv6,
-                            const char* ifname)
+                            bool is_ipv6)
 {
     struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
     char *ptr = NULL;
@@ -1952,9 +1951,6 @@ static int __ofproto_ip_add(struct ofproto *ofproto_,
     VLOG_INFO("Adding IP address %s", ip);
 
     strcpy(prefix, ip);
-
-    ops_sai_route_if_addr_add(&ofproto->vrid, prefix, ifname);
-
     ptr = strchr(prefix, '/');
     ovs_assert(ptr);
 
@@ -1975,13 +1971,12 @@ static int __ofproto_ip_add(struct ofproto *ofproto_,
  */
 static int __ofproto_ip_remove(struct ofproto *ofproto_,
                                  const char *ip,
-                                 bool is_ipv6,
-                                 const char* ifname)
+                                 bool is_ipv6)
 {
     struct ofproto_sai *ofproto = __ofproto_sai_cast(ofproto_);
     char *ptr = NULL;
     char prefix[INET6_ADDRSTRLEN + 5]; /* IP address length + strlen(/128) */
-    int     rc  = 0;
+
     VLOG_INFO("Removing IP address %s", ip);
 
     strcpy(prefix, ip);
@@ -1990,10 +1985,7 @@ static int __ofproto_ip_remove(struct ofproto *ofproto_,
 
     sprintf(ptr, "/%d", is_ipv6 ? 128 : 32);
 
-    rc = ops_sai_route_ip_to_me_delete(&ofproto->vrid, prefix);
-    ops_sai_route_if_addr_delete(&ofproto->vrid, ip, ifname);
-
-    return rc;
+    return ops_sai_route_ip_to_me_delete(&ofproto->vrid, prefix);
 }
 
 /*
@@ -2868,7 +2860,8 @@ __add_l3_host_entry(const struct ofproto *ofproto_, void *aux,
             status = ops_sai_neighbor_create(is_ipv6_addr,
                                              ip_addr,
                                              next_hop_mac_addr,
-                                             &bundle->router_intf.rifid);
+                                             &bundle->router_intf.rifid,
+                                             l3_egress_id);
             ERRNO_EXIT(status);
         }
         __neigh_entry_hash_add(next_hop_mac_addr, ip_addr, bundle);
@@ -3033,9 +3026,7 @@ __l3_route_action(const struct ofproto *ofprotop,
 
             status = ops_sai_route_local_add(&sai_ofproto->vrid,
                                              routep->prefix,
-                                             &bundle->router_intf.rifid,
-                                             lnh_count,
-                                             egress_intf);
+                                             &bundle->router_intf.rifid);
 
             addr = xzalloc(sizeof *addr);
             addr->address = xstrdup(routep->prefix);
@@ -3044,15 +3035,8 @@ __l3_route_action(const struct ofproto *ofprotop,
 
             break;
 
-        case OFPROTO_ROUTE_DELETE_NH:
-            status = ops_sai_route_remote_nh_remove(sai_ofproto->vrid,
-                                                    routep->prefix,
-                                                    lnh_count,
-                                                    egress_intf);
-            break;
-
         case OFPROTO_ROUTE_DELETE:
-        //case OFPROTO_ROUTE_DELETE_NH:
+        case OFPROTO_ROUTE_DELETE_NH:
             /* Bundle is already removed and all local routes are cleared */
             if (!bundle) {
                 break;
