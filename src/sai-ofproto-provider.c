@@ -1012,6 +1012,11 @@ __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
         ERRNO_LOG_EXIT(status, "Failed to add lag member port to bundle");
 	 portid.data = netdev_sai_hw_id_get(port->up.netdev);
         ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, portid,0);
+
+	 if(bundle->router_intf.created){
+	     status = netdev_sai_set_router_intf_handle(port->up.netdev, &bundle->router_intf.rifid);
+            ERRNO_EXIT(status);
+	 }
     }
 
 exit:
@@ -1051,6 +1056,11 @@ __ofbundle_port_del(struct ofport_sai *port)
     {
         status = ops_sai_lag_member_port_del(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
         ERRNO_LOG_EXIT(status, "Failed to remove lag member port to bundle");
+
+	 if(bundle->router_intf.created){
+	     status = netdev_sai_set_router_intf_handle(port->up.netdev, NULL);
+            ERRNO_EXIT(status);
+	 }
     }
 
 exit:
@@ -1532,14 +1542,19 @@ __ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
 
     ovs_assert(STR_EQ(ofproto->up.type, SAI_INTERFACE_TYPE_VRF));
 
-    port = __get_ofp_port(ofproto, s->slaves[0]);
-    if (!port) {
-        status = -1;
-        ERRNO_LOG_EXIT(status, "Failed to get port (slave: %u)",
-                       s->slaves[0]);
+    if(strncmp(s->name,"lag",3) == 0) {
+	    netdev_type = OVSREC_INTERFACE_TYPE_SYSTEM;
+    }else{
+           port = __get_ofp_port(ofproto, s->slaves[0]);
+	    if (!port) {
+	        status = -1;
+	        ERRNO_LOG_EXIT(status, "Failed to get port (slave: %u)",
+	                       s->slaves[0]);
+	    }
+
+	    netdev_type = netdev_get_type(port->up.netdev);
     }
 
-    netdev_type = netdev_get_type(port->up.netdev);
     ovs_assert(netdev_type != NULL);
 
     if (STR_EQ(netdev_type, OVSREC_INTERFACE_TYPE_INTERNAL)) {
@@ -1648,7 +1663,7 @@ static int __ofbundle_router_intf_remove(struct ofbundle_sai *bundle)
         status = ops_sai_router_intf_remove(&bundle->router_intf.rifid);
         ERRNO_EXIT(status);
 
-        memset(&bundle->router_intf, 0, sizeof(bundle->router_intf));
+        memset(&bundle->router_intf, 0, sizeof(bundle->router_intf));		/* bundle->router_intf.created = False */
     }
 
 exit:
@@ -2165,7 +2180,7 @@ __ofbundle_lookup_by_netdev_name(struct ofproto_sai *ofproto,
 
     if(strncmp(name, "lag", 3) == 0) {
         HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
-            if(strcmp(bundle->name, name) == 0) {
+            if(STR_EQ(bundle->name, name)) {
                  return bundle;
              }
          }

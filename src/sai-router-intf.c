@@ -169,7 +169,7 @@ static int __router_intf_create(const handle_t *vr_handle,
         attr[1].id = SAI_ROUTER_INTERFACE_ATTR_TYPE;
         attr[1].value.s32 = SAI_ROUTER_INTERFACE_TYPE_PORT;
         attr[2].id = SAI_ROUTER_INTERFACE_ATTR_PORT_ID;
-        attr[2].value.oid = ops_sai_api_hw_id2port_id(handle->data);
+        attr[2].value.oid = handle->data;						/* handle_t == sai_object_id_t */
     } else {
         attr[1].id = SAI_ROUTER_INTERFACE_ATTR_TYPE;
         attr[1].value.s32 = SAI_ROUTER_INTERFACE_TYPE_VLAN;
