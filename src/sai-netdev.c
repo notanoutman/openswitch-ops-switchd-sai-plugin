@@ -241,6 +241,7 @@ netdev_sai_port_oper_state_changed(sai_object_id_t oid, int link_status)
 
     LIST_FOR_EACH_SAFE(dev, next_dev, list_node, &sai_netdev_list) {
         if (dev->is_port_initialized
+	     && (0 != strcmp(netdev_get_name(&dev->up),DEFAULT_BRIDGE_NAME))
             && ops_sai_api_hw_id2port_id(dev->hw_id) == oid) {
             break;
         }
@@ -907,6 +908,7 @@ netdev_sai_get_port_name_by_handle_id(handle_t    port_id,
 
     LIST_FOR_EACH_SAFE(dev, next_dev, list_node, &sai_netdev_list) {
         if (dev->is_port_initialized
+	     && (0 != strcmp(netdev_get_name(&dev->up),DEFAULT_BRIDGE_NAME))
             && ops_sai_api_hw_id2port_id(dev->hw_id) == port_id.data) {
             found = 1;
             break;
