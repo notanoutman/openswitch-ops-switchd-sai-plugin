@@ -1024,6 +1024,8 @@ __ofbundle_port_del(struct ofport_sai *port)
     struct ofbundle_sai *bundle;
     int status = 0;
     uint32_t hw_id = netdev_sai_hw_id_get(port->up.netdev);
+    sai_mirror_porttype_t   porttype;
+    sai_mirror_portid_t     portid;
 
     if (NULL == port) {
         status = EINVAL;
@@ -1046,6 +1048,17 @@ __ofbundle_port_del(struct ofport_sai *port)
 
     if(-1 != bundle->bond_hw_handle)
     {
+        portid.hw_id = hw_id;
+        porttype = SAI_MIRROR_PORT_PHYSICAL;
+
+        if (bundle->ingress_owner)
+            ops_sai_mirror_src_del(bundle->ingress_owner->hid,
+                    SAI_MIRROR_DATA_DIR_INGRESS, porttype, portid);
+
+        if (bundle->egress_owner)
+            ops_sai_mirror_src_del(bundle->egress_owner->hid,
+                    SAI_MIRROR_DATA_DIR_EGRESS, porttype, portid);
+
         status = ops_sai_lag_member_port_del(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
         ERRNO_LOG_EXIT(status, "Failed to remove lag member port to bundle");
     }
