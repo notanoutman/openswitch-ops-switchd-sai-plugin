@@ -14,6 +14,7 @@
 #include <sai-api-class.h>
 #include <sai-port.h>
 #include <sai-vlan.h>
+#include <sai-fdb.h>
 
 VLOG_DEFINE_THIS_MODULE(sai_vlan);
 
@@ -81,6 +82,30 @@ __vlan_init(void)
     for(vlan_idx = 0; vlan_idx < VLAN_BITMAP_SIZE; vlan_idx++) {
         hmap_init(&all_vlan_member[vlan_idx]);
     }
+}
+
+int
+ops_sai_vlan_intf_update(int vid, bool add)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    struct hvlan_mb_entry *hnode_entry = NULL;
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    if (add) {
+        status = sai_api->vlan_api->create_vlan(vid);
+        if (SAI_STATUS_ITEM_ALREADY_EXISTS == status) {
+            return SAI_STATUS_SUCCESS;
+        }
+
+        SAI_ERROR_LOG_EXIT(status, "Failed to %s vlan vid %d", add ? "create" : "remove", vid);
+
+        HMAP_FOR_EACH(hnode_entry, hmap_node, &all_vlan_member[vid]) {
+            __vlan_port_set(vid, hnode_entry->hw_id, hnode_entry->tag_mode, true);
+        }
+    }
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
 }
 
 /*
@@ -221,12 +246,18 @@ __vlan_set(int vid, bool add)
 
     if (add) {
         status = sai_api->vlan_api->create_vlan(vid);
+        if (SAI_STATUS_ITEM_ALREADY_EXISTS == status) {
+            status = SAI_STATUS_SUCCESS;
+            goto out;
+        }
+
     } else {
         status = sai_api->vlan_api->remove_vlan(vid);
     }
-    SAI_ERROR_LOG_EXIT(status, "Failed to %s vlan vid %d",
-                       add ? "create" : "remove", vid);
 
+    SAI_ERROR_LOG_EXIT(status, "Failed to %s vlan vid %d", add ? "create" : "remove", vid);
+
+out:
     if(add) {
         HMAP_FOR_EACH(hnode_entry, hmap_node, &all_vlan_member[vid]) {
             __vlan_port_set(vid, hnode_entry->hw_id, hnode_entry->tag_mode, true);
@@ -305,6 +336,7 @@ __trunks_port_set(const unsigned long *trunks, uint32_t hw_id, bool add)
 {
     int vid = 0;
     int status = 0;
+    handle_t	handle = HANDLE_INITIALIZAER;
 
     NULL_PARAM_LOG_ABORT(trunks);
 
@@ -317,6 +349,10 @@ __trunks_port_set(const unsigned long *trunks, uint32_t hw_id, bool add)
             ERRNO_EXIT(status);
 
             status = ops_sai_port_pvid_untag_enable_set(hw_id, true);
+            ERRNO_EXIT(status);
+
+	     handle.data = ops_sai_api_hw_id2port_id(hw_id);
+	     status = ops_sai_fdb_flush_entrys(2 /*L2MAC_FLUSH_BY_PORT_VLAN*/, handle,vid);
             ERRNO_EXIT(status);
         }
     }

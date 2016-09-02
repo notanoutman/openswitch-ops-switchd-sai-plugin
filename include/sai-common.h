@@ -84,4 +84,7 @@ struct neigbor_entry {
     char     *ip_address;
 };
 
+int
+ops_sai_vlan_intf_update(int vid, bool add);
+
 #endif /* SAI_COMMON_H */

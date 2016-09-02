@@ -7,7 +7,7 @@
 #define __BOOL_DEFINED
 #endif
 #include <inttypes.h>
-
+#include <string.h>
 #include <util.h>
 #include <hmap.h>
 #include <hash.h>
@@ -19,6 +19,7 @@
 #include <sai-policer.h>
 #include <sai-api-class.h>
 #include <sai-port.h>
+#include <sai-common.h>
 
 #define SAI_TRAP_GROUP_ARP "sai_trap_group_arp"
 #define SAI_TRAP_GROUP_BGP "sai_trap_group_bgp"
@@ -329,6 +330,9 @@ __host_intf_netdev_create(const char *name,
 {
     struct hif_entry hif = { };
     struct hif_entry *p_hif = NULL;
+    char    ifname[64];
+    char    *vlanid = NULL;
+    int     vlan_id = 0;
 
     p_hif = __sai_host_intf_entry_hmap_find(&sai_host_intf, name);
     if (NULL !=  p_hif) {
@@ -353,6 +357,14 @@ __host_intf_netdev_create(const char *name,
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
     NULL_PARAM_LOG_ABORT(name);
+
+    memset(ifname, 0, sizeof(ifname));
+    memcpy(ifname, name, sizeof(ifname));
+    if (0 == strncmp(name, "vlan", 4)) {
+        vlanid = strtok(ifname, "vlan");
+        vlan_id = atoi(vlanid);
+        ops_sai_vlan_intf_update(vlan_id, true);
+    }
 
     hostif_attrib[0].id = SAI_HOSTIF_ATTR_TYPE;
     hostif_attrib[0].value.s32 = SAI_HOSTIF_TYPE_NETDEV;
