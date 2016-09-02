@@ -467,12 +467,12 @@ __stp_set_port_state(char *port_name,
                  port_name);
         return -1;
     }
-
+#if 0
     if(port_stp_set)
     {
         stp_id = stp_default_id;
     }
-
+#endif
     return ops_sai_stp_set_port_state(stp_id,hw_id,port_state);
 }
 
