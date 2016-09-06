@@ -2067,6 +2067,7 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
     struct port         *port_      = NULL;
     struct ofport_sai *port = NULL, *next_port = NULL;
     struct ofmirror_sai	*mir = NULL, *n_mir = NULL;
+    struct ofproto_sai  *ofproto_sai = NULL;
     sai_mirror_porttype_t   porttype;
     sai_mirror_portid_t     portid;
 
@@ -2110,9 +2111,11 @@ __ofbundle_destroy(struct ofbundle_sai *bundle)
         list_init(&bundle->egress_node);
     }
 
-    if (__is_mirror_output_bundle(&bundle->ofproto->up, bundle->aux)) {
-        HMAP_FOR_EACH_SAFE(mir, n_mir, hmap_node, &bundle->ofproto->mirrors) {
-            __ofmirror_destroy(mir, 1);
+    HMAP_FOR_EACH(ofproto_sai, all_ofproto_sai_node, &all_ofproto_sai) {
+        HMAP_FOR_EACH_SAFE(mir, n_mir, hmap_node, &ofproto_sai->mirrors) {
+            if (mir->out->aux == bundle->aux) {
+                __ofmirror_destroy(mir, 1);
+            }
         }
     }
 
