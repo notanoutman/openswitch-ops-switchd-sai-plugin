@@ -13,6 +13,8 @@
 
 VLOG_DEFINE_THIS_MODULE(sai_hash);
 
+static int __ecmp_hash_set(uint64_t fields_to_set, bool enable);
+
 static sai_object_id_t hash_field = 0;
 
 static uint32_t
@@ -56,31 +58,11 @@ __ecmp_hash_type_ofproto_to_sai(uint32_t ofproto_type)
 static void
 __ecmp_hash_init(void)
 {
-    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-    sai_status_t                status = SAI_STATUS_SUCCESS;
-    sai_object_id_t             hash_type = 0;
-    sai_attribute_t             attr[1];
-
-    memset(attr, 0, sizeof(attr));
-
-    OPS_SAI_SET_BIT(hash_type, SAI_NATIVE_HASH_FIELD_SRC_IP);
-    OPS_SAI_SET_BIT(hash_type, SAI_NATIVE_HASH_FIELD_DST_IP);
-    OPS_SAI_SET_BIT(hash_type, SAI_NATIVE_HASH_FIELD_L4_SRC_PORT);
-    OPS_SAI_SET_BIT(hash_type, SAI_NATIVE_HASH_FIELD_L4_DST_PORT);
-
-    attr[0].id = SAI_SWITCH_ATTR_ECMP_HASH;
-    attr[0].value.oid = hash_type;
-    status = sai_api->switch_api->set_switch_attribute(attr);
-
-    SAI_ERROR_LOG_EXIT(status, "Failed to set ecmp hash fields");
-
-    OPS_SAI_SET_FLAG(hash_field, OFPROTO_ECMP_HASH_SRCPORT);
-    OPS_SAI_SET_FLAG(hash_field, OFPROTO_ECMP_HASH_DSTPORT);
-    OPS_SAI_SET_FLAG(hash_field, OFPROTO_ECMP_HASH_SRCIP);
-    OPS_SAI_SET_FLAG(hash_field, OFPROTO_ECMP_HASH_DSTIP);
-
-exit:
-    return;
+    __ecmp_hash_set(OFPROTO_ECMP_HASH_SRCPORT,true);
+    __ecmp_hash_set(OFPROTO_ECMP_HASH_DSTPORT,true);
+    __ecmp_hash_set(OFPROTO_ECMP_HASH_SRCIP,true);
+    __ecmp_hash_set(OFPROTO_ECMP_HASH_DSTIP,true);
+    __ecmp_hash_set(OFPROTO_ECMP_HASH_RESILIENT,true);
 }
 
 /*
@@ -136,16 +118,24 @@ __ecmp_hash_set(uint64_t fields_to_set, bool enable)
         OPS_SAI_SET_BIT(hash_type, SAI_NATIVE_HASH_FIELD_DST_IP);
     }
 
-    if (OPS_SAI_FLAG_ISSET(hash_field, OFPROTO_ECMP_HASH_RESILIENT)) {
-        //need_update = true;
-    }
-
     attr[0].id = SAI_SWITCH_ATTR_ECMP_HASH;
     attr[0].value.oid = hash_type;
 
     status = sai_api->switch_api->set_switch_attribute(attr);
 
     SAI_ERROR_LOG_EXIT(status, "Failed to set ecmp hash fields");
+
+    if (OPS_SAI_FLAG_ISSET(hash_field, OFPROTO_ECMP_HASH_RESILIENT)) {
+        //need_update = true;
+        attr[0].value.u32 = 1;
+    }else{
+        attr[0].value.u32 = 0;
+    }
+
+    attr[0].id = SAI_SWITCH_ATTR_CUSTOM_RANGE_BASE + 1;
+
+    status = sai_api->switch_api->set_switch_attribute(attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set ecmp load-balance resilient hash fields");
 
 exit:
     return 0;

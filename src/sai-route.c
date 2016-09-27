@@ -687,12 +687,15 @@ exit:
 }
 
 int32_t
-ops_sai_routing_nhg_add_member(sai_ops_route_t *p_route, uint32_t nh_cnt, sai_object_id_t *nh_obj)
+ops_sai_routing_nhg_add_member(sai_ops_route_t *p_route, char *keyid)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
+    struct nh_entry     *p_nh_entry = NULL;
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
-    status = sai_api->nhg_api->add_next_hop_to_group(p_route->nh_ecmp.data, nh_cnt, nh_obj);
+    p_nh_entry = ops_sai_route_get_nexthop(keyid);
+
+    status = sai_api->nhg_api->add_next_hop_to_group(p_route->nh_ecmp.data, 1, &p_nh_entry->handle.data);
     SAI_ERROR_LOG_EXIT(status, "Failed to add member to nexthop group");
 
 exit:
@@ -700,12 +703,18 @@ exit:
 }
 
 int32_t
-ops_sai_routing_nhg_del_member(sai_ops_route_t *p_route, uint32_t nh_cnt, sai_object_id_t *nh_obj)
+ops_sai_routing_nhg_del_member(sai_ops_route_t *p_route, char *keyid)
 {
     sai_status_t status = SAI_STATUS_SUCCESS;
+    struct nh_entry     *p_nh_entry = NULL;
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
-    status = sai_api->nhg_api->remove_next_hop_from_group(p_route->nh_ecmp.data, nh_cnt, nh_obj);
+    p_nh_entry = ops_sai_route_get_nexthop(keyid);
+
+    if(!p_nh_entry)
+		goto exit;
+
+    status = sai_api->nhg_api->remove_next_hop_from_group(p_route->nh_ecmp.data, 1, &p_nh_entry->handle.data);
     SAI_ERROR_LOG_EXIT(status, "Failed to remove member from nexthop group");
 
 exit:
@@ -1260,18 +1269,21 @@ __sai_route_remote_action(uint64_t          vrid,
                         }
                     }
                 }
+		   if (OPS_ROUTE_STATE_ECMP != ops_routep->rstate) {
+	                /* create nexthop group */
+	                ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
 
-                /* create nexthop group */
-                ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
+	                ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
+			  ops_routep->nh_ecmp.data = l3_nhg_id.data;
 
-                ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
+			  goto exit;
+		  }
 
-                /* need to update the route nhid before delete the nhg before */
-                if (OPS_ROUTE_STATE_ECMP == ops_routep->rstate) {
-                    ops_sai_routing_nh_group_del(&ops_routep->nh_ecmp);
-                }
+		  /* add nexthop member */
+		  for(index = 0; index < next_hop_count; index++){
+			ops_sai_routing_nhg_add_member(ops_routep,next_hops[index]);
+		  }
 
-                ops_routep->nh_ecmp.data = l3_nhg_id.data;
             }
         }
     } else {
@@ -1300,18 +1312,12 @@ __sai_route_remote_action(uint64_t          vrid,
                 }
             }
             else if (1 < ops_routep->n_nexthops) {
-                /* create nexthop group */
-                ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
 
-                /* update the nhid */
-                ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
+		  /* remove nexthop member */
+		  for(index = 0; index < next_hop_count; index++){
+			ops_sai_routing_nhg_del_member(ops_routep,next_hops[index]);
+		  }
 
-                /* delete the nhid after */
-                if (OPS_ROUTE_STATE_ECMP == ops_routep->rstate) {
-                    ops_sai_routing_nh_group_del(&ops_routep->nh_ecmp);
-                }
-
-                ops_routep->nh_ecmp.data = l3_nhg_id.data;
             } else if (ops_routep->refer_cnt) {
                 /* del the ipuc prefix */
                 status = sai_api->route_api->remove_route(&route);
