@@ -1269,20 +1269,18 @@ __sai_route_remote_action(uint64_t          vrid,
                         }
                     }
                 }
-		   if (OPS_ROUTE_STATE_ECMP != ops_routep->rstate) {
-	                /* create nexthop group */
-	                ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
+		if (OPS_ROUTE_STATE_ECMP != ops_routep->rstate) {
+	             /* create nexthop group */
+	             ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
+	             ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
+	             ops_routep->nh_ecmp.data = l3_nhg_id.data;
+		     goto exit;
+	        }
 
-	                ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
-			  ops_routep->nh_ecmp.data = l3_nhg_id.data;
-
-			  goto exit;
-		  }
-
-		  /* add nexthop member */
-		  for(index = 0; index < next_hop_count; index++){
-			ops_sai_routing_nhg_add_member(ops_routep,next_hops[index]);
-		  }
+	        /* add nexthop member */
+		for(index = 0; index < next_hop_count; index++){
+		    ops_sai_routing_nhg_add_member(ops_routep,next_hops[index]);
+	        }
 
             }
         }
@@ -1317,13 +1315,18 @@ __sai_route_remote_action(uint64_t          vrid,
 		  for(index = 0; index < next_hop_count; index++){
 			ops_sai_routing_nhg_del_member(ops_routep,next_hops[index]);
 		  }
-
-            } else if (ops_routep->refer_cnt) {
-                /* del the ipuc prefix */
-                status = sai_api->route_api->remove_route(&route);
-                __ops_sai_route_local_add(&vrfid, prefix);
-            }
-
+            } else {
+		if (ops_routep->refer_cnt) {
+                    /* del the ipuc prefix */
+                    status = sai_api->route_api->remove_route(&route);
+                    __ops_sai_route_local_add(&vrfid, prefix);
+                } else {
+                    /* del the ipuc prefix */
+                    status = sai_api->route_api->remove_route(&route);
+                    ops_sai_route_del(ops_routep);
+		    return status;
+		}
+	    }
             /* del the nexthop db or refer  */
             for(index = 0; index < next_hop_count; index++)
             {
