@@ -19,9 +19,10 @@ VLOG_DEFINE_THIS_MODULE(sai_api_class);
 static sai_fdb_event_notification_fn sai_fdb_event_callback = NULL;
 
 static struct ops_sai_api_class sai_api;
-static sai_object_id_t sai_lable_id_to_oid_map[SAI_PORTS_MAX];
+static sai_object_id_t hw_lane_id_to_oid_map[SAI_PORTS_MAX * SAI_MAX_LANES];
 static struct eth_addr sai_api_mac;
 static char sai_api_mac_str[MAC_STR_LEN + 1];
+static char sai_config_file_path[PATH_MAX] = { };
 
 static const char *__profile_get_value(sai_switch_profile_id_t, const char *);
 static int __profile_get_next_value(sai_switch_profile_id_t, const char **,
@@ -34,7 +35,7 @@ static void __event_port(uint32_t, sai_port_event_notification_t *);
 static void __event_switch_shutdown(void);
 static void __event_rx_packet(const void *, sai_size_t, uint32_t,
                                 const sai_attribute_t *);
-static sai_status_t __get_port_lable_id(sai_object_id_t, uint32_t *);
+static sai_status_t __get_port_hw_lane_id(sai_object_id_t, uint32_t *);
 static sai_status_t __init_ports(void);
 
 /**
@@ -49,8 +50,6 @@ ops_sai_api_init(void)
         __profile_get_value,
         __profile_get_next_value,
     };
-
-
     static sai_switch_notification_t sai_events = {
         __event_switch_state_changed,
         __event_fdb,
@@ -74,6 +73,10 @@ ops_sai_api_init(void)
             sai_api_mac.ea[2], sai_api_mac.ea[3],
             sai_api_mac.ea[4], sai_api_mac.ea[5]);
 
+    status = ops_sai_vendor_config_path_get(sai_config_file_path,
+                                            sizeof(sai_config_file_path));
+    SAI_ERROR_LOG_EXIT(status, "Failed to get config file path");
+
     status = sai_api_initialize(0, &sai_services);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI api");
 
@@ -90,9 +93,6 @@ ops_sai_api_init(void)
     status = sai_api_query(SAI_API_VLAN, (void **) &sai_api.vlan_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI vlan api");
 
-    status = sai_api_query(SAI_API_MIRROR, (void **) &sai_api.mirror_api);
-    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI Mirror api");
-
     status = sai_api_query(SAI_API_HOST_INTERFACE,
                            (void **) &sai_api.host_interface_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI host interface api");
@@ -104,6 +104,9 @@ ops_sai_api_init(void)
     status = sai_api_query(SAI_API_HASH,
                            (void **) &sai_api.hash_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI hash api");
+
+    status = sai_api_query(SAI_API_MIRROR, (void **) &sai_api.mirror_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI Mirror api");
 
     status = sai_api_query(SAI_API_STP,
                            (void **) &sai_api.stp_api);
@@ -141,14 +144,8 @@ ops_sai_api_init(void)
                            (void **) &sai_api.router_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI virtual router api");
 
-//    status = __init_ports();
+    status = __init_ports();
     SAI_ERROR_LOG_EXIT(status, "Failed to create interfaces");
-
-    sai_attribute_t attr[1];
-
-    attr[0].id = SAI_SWITCH_ATTR_SRC_MAC_ADDRESS;
-    memcpy(attr[0].value.mac, sai_api_mac.ea, sizeof(sai_mac_t));
-    sai_api.switch_api->set_switch_attribute(attr);
 
     sai_api.initialized = true;
 
@@ -189,14 +186,43 @@ ops_sai_api_get_instance(void)
 
 /**
  * Convert port label ID to sai_object_id_t.
+ *
+ * @param[in] hw_id port HW lane id.
+ *
  * @return sai_object_id_t of requested port.
  */
 sai_object_id_t
-ops_sai_api_hw_id2port_id(uint32_t hw_id)
+ops_sai_api_port_map_get_oid(uint32_t hw_id)
 {
-    //return sai_lable_id_to_oid_map[hw_id];
-    /*add by chenyq, currenty use this to get gport*/
-    return (((sai_object_id_t)(1)<<32 )| (sai_object_id_t)hw_id);
+    ovs_assert(hw_id <= ARRAY_SIZE(hw_lane_id_to_oid_map));
+    return hw_lane_id_to_oid_map[hw_id];
+}
+
+/**
+ * Delete port label ID from map.
+ *
+ * @param[in] hw_id port HW lane id.
+ *
+ * @return sai_object_id_t of requested port.
+ */
+void ops_sai_api_port_map_delete(uint32_t hw_id)
+{
+    ovs_assert(hw_id <= ARRAY_SIZE(hw_lane_id_to_oid_map));
+    hw_lane_id_to_oid_map[hw_id] = SAI_NULL_OBJECT_ID;
+}
+
+/**
+ * Add port label ID to map.
+ *
+ * @param[in] hw_id port HW lane id.
+ * @param[in] oid SAI port object ID.
+ *
+ * @return sai_object_id_t of requested port.
+ */
+void ops_sai_api_port_map_add(uint32_t hw_id, sai_object_id_t oid)
+{
+    ovs_assert(hw_id <= ARRAY_SIZE(hw_lane_id_to_oid_map));
+    hw_lane_id_to_oid_map[hw_id] = oid;
 }
 
 /**
@@ -216,8 +242,6 @@ ops_sai_api_base_mac_get(struct eth_addr *mac)
 /*
  * Return value requested by SAI using string key.
  */
-#define SAI_KEY_INIT_CONFIG_FILE "SAI_KEY_INIT_CONFIG_FILE"
-#define SAI_KEY_INIT_CONFIG_FILE_PATH "/etc/spec/spec.txt"
 static const char *
 __profile_get_value(sai_switch_profile_id_t profile_id, const char *variable)
 {
@@ -225,8 +249,8 @@ __profile_get_value(sai_switch_profile_id_t profile_id, const char *variable)
 
     NULL_PARAM_LOG_ABORT(variable);
 
-    if (!strcmp(variable, SAI_KEY_INIT_CONFIG_FILE)) {
-        return SAI_INIT_CONFIG_FILE_PATH;
+    if (!strcmp(variable, "BOARD_CONFIG_FILE_PATH")) {
+        return sai_config_file_path;
     } else if (!strcmp(variable, "DEVICE_MAC_ADDRESS")) {
         return sai_api_mac_str;
     } else if (!strcmp(variable, "INITIAL_FAN_SPEED")) {
@@ -321,13 +345,13 @@ __event_rx_packet(const void *buffer, sai_size_t buffer_size,
  * Get port label ID bi sai_object_id_t.
  */
 static sai_status_t
-__get_port_lable_id(sai_object_id_t oid, uint32_t *label_id)
+__get_port_hw_lane_id(sai_object_id_t oid, uint32_t *hw_lane_id)
 {
     sai_attribute_t attr;
     uint32_t hw_lanes[SAI_MAX_LANES];
     sai_status_t status = SAI_STATUS_SUCCESS;
 
-    NULL_PARAM_LOG_ABORT(label_id);
+    NULL_PARAM_LOG_ABORT(hw_lane_id);
 
     attr.id = SAI_PORT_ATTR_HW_LANE_LIST;
     attr.value.u32list.count = SAI_MAX_LANES;
@@ -342,10 +366,9 @@ __get_port_lable_id(sai_object_id_t oid, uint32_t *label_id)
         goto exit;
     }
 
-   // *label_id = (hw_lanes[0] / attr.value.u32list.count) + 1;
-   *label_id = 0;
-   /*add by chenyq for not crush*/
-    VLOG_DBG("Port label id: %u", *label_id);
+    *hw_lane_id = hw_lanes[0];
+    VLOG_DBG("Port HW lane ID to SAI OID mapping (hw_lane: %u, oid: 0x%lx",
+             *hw_lane_id, oid);
 
 exit:
     return status;
@@ -357,7 +380,7 @@ exit:
 static sai_status_t
 __init_ports(void)
 {
-    uint32_t label_id = 0;
+    uint32_t hw_lane_id = 0;
     sai_uint32_t port_number = 0;
     sai_attribute_t switch_attrib = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
@@ -375,22 +398,15 @@ __init_ports(void)
     SAI_ERROR_LOG_EXIT(status, "Failed to get switch port list");
 
     for (int i = 0; i < port_number; ++i) {
-        status = __get_port_lable_id(sai_oids[i], &label_id);
+        status = __get_port_hw_lane_id(sai_oids[i], &hw_lane_id);
         SAI_ERROR_LOG_EXIT(status, "Failed to get switch port list");
 
-        if (label_id > port_number) {
-            status = SAI_STATUS_BUFFER_OVERFLOW;
-            SAI_ERROR_LOG_EXIT(status, "label_id is too large");
-        }
-
-        sai_lable_id_to_oid_map[label_id] = sai_oids[i];
+        ops_sai_api_port_map_add(hw_lane_id, sai_oids[i]);
     }
 
 exit:
     return status;
 }
-
-
 
 void
 ops_sai_fdb_event_register(sai_fdb_event_notification_fn fn_cb)

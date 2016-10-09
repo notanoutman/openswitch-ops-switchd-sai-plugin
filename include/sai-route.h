@@ -48,7 +48,6 @@ struct route_class {
     int  (*local_add)(const handle_t *vrid,
                       const char     *prefix,
                       const handle_t *rifid);
-
     /**
      *  Function for adding next hops(list of remote routes) which are accessible
      *  over specified IP prefix

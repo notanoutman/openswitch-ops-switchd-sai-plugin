@@ -47,7 +47,7 @@ __get_oid(sai_mirror_portid_t id, sai_mirror_porttype_t t, sai_object_id_t *oid)
     handle_t lag_hid;
 
     if (t == SAI_MIRROR_PORT_PHYSICAL)
-        *oid = ops_sai_api_hw_id2port_id(id.hw_id);
+        *oid = ops_sai_api_port_map_get_oid(id.hw_id);
     else if (!ops_sai_lag_get_handle_id(id.lag_id, &lag_hid))
         *oid = lag_hid.data;
     else

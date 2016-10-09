@@ -3,9 +3,7 @@
  * This software product is licensed under Apache version 2, as detailed in
  * the COPYING file.
  */
-#ifndef __BOOL_DEFINED
-#define __BOOL_DEFINED
-#endif
+
 #include <inttypes.h>
 #include <string.h>
 #include <util.h>
@@ -371,7 +369,7 @@ __host_intf_netdev_create(const char *name,
     hostif_attrib[1].id = SAI_HOSTIF_ATTR_NAME;
     strcpy(hostif_attrib[1].value.chardata, name);
     hostif_attrib[2].id = SAI_HOSTIF_ATTR_RIF_OR_PORT_ID;
-    hostif_attrib[2].value.oid = ops_sai_api_hw_id2port_id(handle->data);
+    hostif_attrib[2].value.oid = ops_sai_api_port_map_get_oid(handle->data);
 
     status = sai_api->host_interface_api->create_hostif(&hif_id_port,
                                                         ARRAY_SIZE(hostif_attrib),

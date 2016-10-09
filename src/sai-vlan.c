@@ -286,7 +286,7 @@ __vlan_port_set(sai_vlan_id_t vid, uint32_t hw_id,
     struct hvlan_mb_entry *hnode_entry = NULL;
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
-    vlan_port.port_id = ops_sai_api_hw_id2port_id(hw_id);
+    vlan_port.port_id = ops_sai_api_port_map_get_oid(hw_id);
     vlan_port.tagging_mode = mode;
     if (add) {
         status = sai_api->vlan_api->add_ports_to_vlan(vid, 1, &vlan_port);
@@ -351,7 +351,7 @@ __trunks_port_set(const unsigned long *trunks, uint32_t hw_id, bool add)
             status = ops_sai_port_pvid_untag_enable_set(hw_id, true);
             ERRNO_EXIT(status);
 
-	     handle.data = ops_sai_api_hw_id2port_id(hw_id);
+	     handle.data = ops_sai_api_port_map_get_oid(hw_id);
 	     status = ops_sai_fdb_flush_entrys(2 /*L2MAC_FLUSH_BY_PORT_VLAN*/, handle,vid);
             ERRNO_EXIT(status);
         }

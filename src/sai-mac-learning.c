@@ -121,7 +121,7 @@ sai_mac_learning_get_id_from_port_name(char* port_name, handle_t *hand_id)
 
     if(true == netdev_sai_get_hw_id_by_name(port_name, &hw_id))  {
 	 VLOG_INFO("%s: hw_id = 0x%x ", __FUNCTION__, hw_id);
-        hand_id->data = ops_sai_api_hw_id2port_id(hw_id);
+        hand_id->data = ops_sai_api_port_map_get_oid(hw_id);
         return 0;
     } else if(true == ofbundle_get_handle_id_by_port_name(port_name,hand_id)) {
         VLOG_INFO("%s: port_id: %lx ", __FUNCTION__,hand_id->data);

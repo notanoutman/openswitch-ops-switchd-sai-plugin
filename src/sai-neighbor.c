@@ -37,8 +37,7 @@ static int
 __neighbor_create(bool           is_ipv6_addr,
                   const char     *ip_addr,
                   const char     *mac_addr,
-                  const handle_t *rif,
-                  int            *l3_id)
+                  const handle_t *rif)
 {
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
     sai_status_t            status      = SAI_STATUS_SUCCESS;
@@ -93,7 +92,6 @@ __neighbor_create(bool           is_ipv6_addr,
     }
 
     ops_sai_neighbor_add_nexthop(ip_addr, &l3_egress_id);
-    *l3_id = l3_egress_id.data;
 
     status = sai_api->neighbor_api->create_neighbor_entry(&sai_neighbor, 1, attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to create host entry");

@@ -26,7 +26,7 @@
 #define __CLASS_GETTER(_name, _sufix)       _name##_getter##_sufix
 
 #define __DECLARE_CLASS_GETTER(_type, _name, _sufix) \
-    _type *_name##_getter##_sufix(void)
+    _type *_name##_getter##_sufix()
 
 #define __DEFINE_CLASS_GETTER(_type, _name, _sufix) \
     __DECLARE_CLASS_GETTER(_type, _name, _sufix)    \
@@ -83,6 +83,16 @@ struct neigbor_entry {
     char     *mac_address;
     char     *ip_address;
 };
+
+typedef enum sai_mirror_porttype {
+    SAI_MIRROR_PORT_PHYSICAL,
+    SAI_MIRROR_PORT_LAG,
+} sai_mirror_porttype_t;
+
+typedef union sai_mirror_portid {
+    int                 lag_id;
+    uint32_t            hw_id;
+} sai_mirror_portid_t;
 
 int
 ops_sai_vlan_intf_update(int vid, bool add);

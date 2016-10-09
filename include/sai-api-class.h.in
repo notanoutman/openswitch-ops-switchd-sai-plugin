@@ -12,7 +12,7 @@
 #define SAI_PORTS_MAX (64)
 #define SAI_MAX_LANES (4)
 
-#define SAI_INIT_CONFIG_FILE_PATH "/etc/spec/"
+#cmakedefine SAI_INIT_CONFIG_FILE_PATH "@SAI_INIT_CONFIG_FILE_PATH@"
 
 struct eth_addr;
 

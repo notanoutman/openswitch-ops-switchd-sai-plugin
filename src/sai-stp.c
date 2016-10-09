@@ -440,7 +440,7 @@ __stp_set_port_state(int  stpid,
     __stp_get_port_state_2_hw_port_state(port_state, &hw_stp_state);
 
     status = sai_api->stp_api->set_stp_port_state(hstp_entry->handle.data,
-                                                  ops_sai_api_hw_id2port_id(hw_id),
+                                                  ops_sai_api_port_map_get_oid(hw_id),
                                                   hw_stp_state);
 
     SAI_ERROR_LOG_EXIT(status, "stp %d port %d state %d set error",stpid, hw_id, port_state);
@@ -475,7 +475,7 @@ __stp_get_port_state(int  stpid,
     }
 
     status = sai_api->stp_api->get_stp_port_state(hstp_entry->handle.data,
-                                                  ops_sai_api_hw_id2port_id(hw_id),
+                                                  ops_sai_api_port_map_get_oid(hw_id),
                                                   &hw_stp_state);
 
     SAI_ERROR_LOG_EXIT(status, "stp %d port %d state get error",stpid, hw_id);

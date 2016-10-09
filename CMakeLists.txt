@@ -23,10 +23,10 @@ if(DEFINED SAI_VENDOR)
   set(SAI_VENDOR_SOURCES ${SRC_DIR}/vendor/${SAI_VENDOR_DIR}/*.c)
 endif(DEFINED SAI_VENDOR)
 
-set(SAI_INIT_CONFIG_FILE_PATH " " CACHE STRING "path to SAI configuration file")
+set(SAI_INIT_CONFIG_FILE_PATH /etc/spec/)
 
-###configure_file(${CMAKE_SOURCE_DIR}/${INCL_DIR}/sai-api-class.h.in
-###               ${CMAKE_SOURCE_DIR}/${INCL_DIR}/sai-api-class.h)
+configure_file(${CMAKE_SOURCE_DIR}/${INCL_DIR}/sai-api-class.h.in
+               ${CMAKE_SOURCE_DIR}/${INCL_DIR}/sai-api-class.h)
 
 ###
 ### Define sources

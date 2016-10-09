@@ -23,21 +23,38 @@ struct ops_sai_port_transaction_callback {
     enum ops_sai_port_transaction type;
 };
 
+struct port_info {
+    struct ops_sai_port_config config;
+    uint32_t hw_lanes[SAI_MAX_LANES];
+    uint32_t hw_lanes_count;
+};
+
+//static struct port_info port_info[SAI_PORTS_MAX * SAI_MAX_LANES];
+
 static struct ovs_list callback_list = OVS_LIST_INITIALIZER(&callback_list);
 
 static sai_status_t __set_hw_intf_config_full(uint32_t,
                                               const struct
                                               ops_sai_port_config *,
                                               struct ops_sai_port_config *);
-#ifndef MLNX_SAI
 static sai_port_flow_control_mode_t sai_port_pause(bool, bool);
-#endif
+static sai_status_t __port_get_lane_list(uint32_t, uint32_t *, uint32_t *);
+static sai_status_t __create_port(uint32_t, uint32_t *, uint32_t, uint32_t);
+static sai_status_t __remove_port(uint32_t);
+static sai_status_t __port_unsplit(uint32_t, uint32_t, uint32_t, uint32_t *);
+static sai_status_t __port_split_to_2(uint32_t, uint32_t, uint32_t, uint32_t *);
+static sai_status_t __port_split_to_4(uint32_t, uint32_t, uint32_t, uint32_t *);
 
 void
 ops_sai_port_init(void)
 {
     ovs_assert(ops_sai_port_class()->init);
     ops_sai_port_class()->init();
+}
+
+static int __hw_lane_cmp(const void *a, const void *b)
+{
+    return ((*(uint32_t *)a) - (*(uint32_t*)b));
 }
 
 /*
@@ -156,8 +173,8 @@ __port_config_get(uint32_t hw_id, struct ops_sai_port_config *conf)
         PORT_ATTR_AUTONEG,
 #ifndef MLNX_SAI
         PORT_ATTR_DUPLEX,
-        PORT_ATTR_FLOW_CONTROL,
 #endif
+        PORT_ATTR_FLOW_CONTROL,
         PORT_ATTR_MTU,
         PORT_ATTR_SPEED,
         PORT_ATTR_COUNT
@@ -165,11 +182,9 @@ __port_config_get(uint32_t hw_id, struct ops_sai_port_config *conf)
 
     sai_attribute_t attr[PORT_ATTR_COUNT] = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-#ifndef MLNX_SAI
     sai_port_flow_control_mode_t pause = SAI_PORT_FLOW_CONTROL_DISABLE;
-#endif
 
     NULL_PARAM_LOG_ABORT(conf);
 
@@ -177,25 +192,25 @@ __port_config_get(uint32_t hw_id, struct ops_sai_port_config *conf)
     attr[PORT_ATTR_AUTONEG].id = SAI_PORT_ATTR_AUTO_NEG_MODE;
 #ifndef MLNX_SAI
     attr[PORT_ATTR_DUPLEX].id = SAI_PORT_ATTR_FULL_DUPLEX_MODE;
-    attr[PORT_ATTR_FLOW_CONTROL].id = SAI_PORT_ATTR_GLOBAL_FLOW_CONTROL;
 #endif
+    attr[PORT_ATTR_FLOW_CONTROL].id = SAI_PORT_ATTR_GLOBAL_FLOW_CONTROL;
     attr[PORT_ATTR_MTU].id = SAI_PORT_ATTR_MTU;
     attr[PORT_ATTR_SPEED].id = SAI_PORT_ATTR_SPEED;
 
     status = sai_api->port_api->get_port_attribute(port_oid, PORT_ATTR_COUNT,
                                                    attr);
-    SAI_ERROR_EXIT(status);
+    SAI_ERROR_LOG_EXIT(status, "Failed to get config on port %d", hw_id);
 
     conf->hw_enable = attr[PORT_ATTR_HW_ENABLE].value.booldata;
     conf->autoneg = attr[PORT_ATTR_AUTONEG].value.booldata;
 #ifndef MLNX_SAI
     conf->full_duplex = attr[PORT_ATTR_DUPLEX].value.booldata;
+#endif
     pause = attr[PORT_ATTR_FLOW_CONTROL].value.u32;
     conf->pause_tx = (pause == SAI_PORT_FLOW_CONTROL_TX_ONLY) ||
                      (pause == SAI_PORT_FLOW_CONTROL_BOTH_ENABLE);
     conf->pause_rx = (pause == SAI_PORT_FLOW_CONTROL_RX_ONLY) ||
                      (pause == SAI_PORT_FLOW_CONTROL_BOTH_ENABLE);
-#endif
     conf->mtu = attr[PORT_ATTR_MTU].value.u32;
     conf->speed = attr[PORT_ATTR_SPEED].value.u32;
 
@@ -228,7 +243,7 @@ __port_config_set(uint32_t hw_id, const struct ops_sai_port_config *new,
     sai_attribute_t attr = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-    sai_object_id_t port_id = ops_sai_api_hw_id2port_id(hw_id);
+    sai_object_id_t port_id = ops_sai_api_port_map_get_oid(hw_id);
 
     NULL_PARAM_LOG_ABORT(old);
     NULL_PARAM_LOG_ABORT(new);
@@ -275,7 +290,7 @@ __port_mtu_get(uint32_t hw_id, int *mtu)
     NULL_PARAM_LOG_ABORT(mtu);
 
     attr.id = SAI_PORT_ATTR_MTU;
-    status = sai_api->port_api->get_port_attribute(ops_sai_api_hw_id2port_id(hw_id),
+    status = sai_api->port_api->get_port_attribute(ops_sai_api_port_map_get_oid(hw_id),
                                                    1, &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to get mtu for port %d", hw_id);
 
@@ -309,7 +324,7 @@ __port_mtu_set(uint32_t hw_id, int mtu)
 
     attr.id = SAI_PORT_ATTR_MTU;
     attr.value.u32 = mtu + 38;
-    status = sai_api->port_api->set_port_attribute(ops_sai_api_hw_id2port_id(hw_id),
+    status = sai_api->port_api->set_port_attribute(ops_sai_api_port_map_get_oid(hw_id),
                                                    &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to set %d mtu for port %d", mtu, hw_id);
 
@@ -343,7 +358,7 @@ __port_carrier_get(uint32_t hw_id, bool *carrier)
     NULL_PARAM_LOG_ABORT(carrier);
 
     attr.id = SAI_PORT_ATTR_OPER_STATUS;
-    status = sai_api->port_api->get_port_attribute(ops_sai_api_hw_id2port_id(hw_id),
+    status = sai_api->port_api->get_port_attribute(ops_sai_api_port_map_get_oid(hw_id),
                                                    1, &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to get carrier for port %d", hw_id);
 
@@ -383,7 +398,7 @@ __port_flags_update(uint32_t hw_id, enum netdev_flags off,
     NULL_PARAM_LOG_ABORT(old_flagsp);
 
     attr.id = SAI_PORT_ATTR_ADMIN_STATE;
-    status = sai_api->port_api->get_port_attribute(ops_sai_api_hw_id2port_id(hw_id),
+    status = sai_api->port_api->get_port_attribute(ops_sai_api_port_map_get_oid(hw_id),
                                                    1, &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to get admin state from port %d",
                        hw_id);
@@ -400,7 +415,7 @@ __port_flags_update(uint32_t hw_id, enum netdev_flags off,
         goto exit;
     }
 
-    status = sai_api->port_api->set_port_attribute(ops_sai_api_hw_id2port_id(hw_id),
+    status = sai_api->port_api->set_port_attribute(ops_sai_api_port_map_get_oid(hw_id),
                                                    &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to set admin state on port %d", hw_id);
 
@@ -428,7 +443,7 @@ __port_pvid_get(uint32_t hw_id, sai_vlan_id_t *pvid)
 {
     sai_attribute_t attr = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
     NULL_PARAM_LOG_ABORT(pvid);
@@ -465,14 +480,14 @@ __port_pvid_set(uint32_t hw_id, sai_vlan_id_t pvid)
     sai_status_t status = SAI_STATUS_SUCCESS;
     sai_vlan_id_t old_vid = 0;
     handle_t        handle;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-    VLOG_DBG("__port_pvid_set hw_id = %u, pvid = %d", hw_id,pvid);
+
     status = __port_pvid_get(hw_id,&old_vid);
     SAI_ERROR_LOG_EXIT(status, "Failed to get pvid %d for port %u",
                        pvid, hw_id);
 
-    if(pvid == old_vid) {
+	if(pvid == old_vid) {
         return 0;
     }
 
@@ -482,8 +497,7 @@ __port_pvid_set(uint32_t hw_id, sai_vlan_id_t pvid)
     SAI_ERROR_LOG_EXIT(status, "Failed to set pvid %d for port %u",
                        pvid, hw_id);
 
-    VLOG_DBG("__port_pvid_set ops_sai_fdb_flush_entrys hw_id = %u, pvid = %d", hw_id,old_vid);
-    handle.data = ops_sai_api_hw_id2port_id(hw_id);
+    handle.data = ops_sai_api_port_map_get_oid(hw_id);
     status = ops_sai_fdb_flush_entrys(2/*L2MAC_FLUSH_BY_PORT_VLAN*/, handle, old_vid);
     SAI_ERROR_LOG_EXIT(status, "Failed to ops_sai_fdb_flush_entrys vid %d for port %u",
                        old_vid, hw_id);
@@ -497,6 +511,23 @@ ops_sai_port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
 {
     ovs_assert(ops_sai_port_class()->stats_get);
     return ops_sai_port_class()->stats_get(hw_id, stats);
+}
+
+int
+ops_sai_port_split_info_get(uint32_t hw_id, enum ops_sai_port_split mode,
+                           struct split_info *info)
+{
+    ovs_assert(ops_sai_port_class()->split_info_get);
+    return ops_sai_port_class()->split_info_get(hw_id, mode, info);
+}
+
+int ops_sai_port_split(uint32_t hw_id, enum ops_sai_port_split mode, uint32_t speed,
+                       uint32_t sub_intf_hw_id_cnt,
+                       const uint32_t *sub_intf_hw_id)
+{
+    ovs_assert(ops_sai_port_class()->split);
+    return ops_sai_port_class()->split(hw_id, mode, speed,
+                                       sub_intf_hw_id_cnt, sub_intf_hw_id);
 }
 
 /*
@@ -528,12 +559,13 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
 #endif
         STAT_IDX_ETHER_STATS_CRC_ALIGN_ERRORS,
 
-#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+        /* Since SAI's defination about port stats are not so clear,
+         * we have defined another set enumerations in sai/inc/saiport.h */
+#if 1
         STAT_IDX_IF_IN_PKTS,
         STAT_IDX_IF_OUT_PKTS,
         STAT_IDX_IF_IN_CRC_ERR_PKTS,
 #endif
-
         STAT_IDX_COUNT
     };
     static const sai_port_stat_counter_t counter_ids[] = {
@@ -554,7 +586,7 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
 #endif
         SAI_PORT_STAT_ETHER_STATS_CRC_ALIGN_ERRORS,
 
-#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+#if 1
         SAI_PORT_STAT_IF_IN_PKTS,
         SAI_PORT_STAT_IF_OUT_PKTS,
         SAI_PORT_STAT_IF_IN_CRC_ERR_PKTS,
@@ -562,7 +594,7 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
     };
     uint64_t counters[STAT_IDX_COUNT] = {};
     sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
     NULL_PARAM_LOG_ABORT(stats);
@@ -571,7 +603,7 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
                                                STAT_IDX_COUNT, counters);
     SAI_ERROR_LOG_EXIT(status, "Failed to get stats for port %d", hw_id);
 
-#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+#if 1
     stats->rx_packets = counters[STAT_IDX_IF_IN_PKTS];
     stats->tx_packets = counters[STAT_IDX_IF_OUT_PKTS];
 #else
@@ -591,108 +623,83 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
 #ifndef MLNX_SAI
     stats->rx_over_errors = counters[STAT_IDX_ETHER_RX_OVERSIZE_PKTS];
 #endif
-#if 1   /* substitute "1" with centec identifier in future, like CENTEC_SAI */
+#if 1
     stats->rx_crc_errors = counters[STAT_IDX_IF_IN_CRC_ERR_PKTS];
 #else
     stats->rx_crc_errors = counters[STAT_IDX_ETHER_STATS_CRC_ALIGN_ERRORS];
 #endif
 
-
 exit:
     return SAI_ERROR_2_ERRNO(status);
 }
 
-int ops_sai_port_ingress_filter_set(uint32_t hw_id, bool enable)
+/*
+ * Get port split info.
+ *
+ * @param[in] hw_id port HW lane id.
+ * @param[in] mode split mode for which info requested.
+ * @param[out] info pointer to split info structure.
+ *
+ * @return 0, sai status converted to errno otherwise.
+ */
+int __port_split_info_get(uint32_t hw_id, enum ops_sai_port_split mode,
+                          struct split_info
+                          *info)
 {
-    ovs_assert(ops_sai_port_class()->ingress_filter_set);
-    return ops_sai_port_class()->ingress_filter_set(hw_id, enable);
+    info->disable_neighbor = false;
+    return 0;
 }
 
-int __port_ingress_filter_set(uint32_t hw_id, bool enable)
+/*
+ * Split port.
+ *
+ * @param[in] hw_id parent port label id.
+ * @param[in] mode port split mode.
+ * @param[in] speed port speed.
+ * @param[in] sub_intf_hw_id_cnt count of sub-interfaces HW IDs.
+ * @param[in] sub_intf_hw_id list of sub-interfaces HW IDs.
+ *
+ * @return 0, sai status converted to errno otherwise.
+ */
+int __port_split(uint32_t hw_id, enum ops_sai_port_split mode, uint32_t speed,
+                 uint32_t sub_intf_hw_id_cnt, const uint32_t *sub_intf_hw_id)
 {
-    sai_attribute_t attr = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
-    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+    uint32_t hw_id_list[SAI_MAX_LANES] = { };
 
-    attr.id = SAI_PORT_ATTR_INGRESS_FILTERING;
-    attr.value.booldata = enable;
-    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
-    SAI_ERROR_LOG_EXIT(status, "Failed to set ingress filter %d for port %u",
-                       enable, hw_id);
+    NULL_PARAM_LOG_ABORT(sub_intf_hw_id);
+    ovs_assert(sub_intf_hw_id_cnt <= SAI_MAX_LANES);
+
+    memcpy(hw_id_list, sub_intf_hw_id, sizeof(*hw_id_list) * sub_intf_hw_id_cnt);
+    qsort(hw_id_list, sub_intf_hw_id_cnt, sizeof(*hw_id_list), __hw_lane_cmp);
+
+    VLOG_INFO("Port split (hw_id: %u, mode: %d, sub-intf-cnt: %u)",
+              hw_id, mode, sub_intf_hw_id_cnt);
+
+    switch (mode) {
+    case OPS_SAI_PORT_SPLIT_UNSPLIT:
+            status = __port_unsplit(hw_id, speed, sub_intf_hw_id_cnt, hw_id_list);
+            SAI_ERROR_EXIT(status);
+            break;
+    case OPS_SAI_PORT_SPLIT_TO_2:
+            status = __port_split_to_2(hw_id, speed, sub_intf_hw_id_cnt, hw_id_list);
+            SAI_ERROR_EXIT(status);
+            break;
+    case OPS_SAI_PORT_SPLIT_TO_4:
+            status = __port_split_to_4(hw_id, speed, sub_intf_hw_id_cnt, hw_id_list);
+            SAI_ERROR_EXIT(status);
+            break;
+    default:
+        ovs_assert(false);
+        break;
+    }
 
 exit:
+    VLOG_INFO("Port split finished (status: %d), ",
+              status);
     return SAI_ERROR_2_ERRNO(status);
 }
 
-int ops_sai_port_drop_tagged_set(uint32_t hw_id, bool enable)
-{
-    ovs_assert(ops_sai_port_class()->drop_tagged_set);
-    return ops_sai_port_class()->drop_tagged_set(hw_id, enable);
-}
-
-int __port_drop_tagged_set(uint32_t hw_id, bool enable)
-{
-    sai_attribute_t attr = { };
-    sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
-    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-
-    attr.id = SAI_PORT_ATTR_DROP_TAGGED;
-    attr.value.booldata = enable;
-    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
-    SAI_ERROR_LOG_EXIT(status, "Failed to set tagged %d for port %u",
-                       enable, hw_id);
-
-exit:
-    return SAI_ERROR_2_ERRNO(status);
-}
-
-int ops_sai_port_drop_untagged_set(uint32_t hw_id, bool enable)
-{
-    ovs_assert(ops_sai_port_class()->drop_untagged_set);
-    return ops_sai_port_class()->drop_untagged_set(hw_id, enable);
-}
-
-int __port_drop_untagged_set(uint32_t hw_id, bool enable)
-{
-    sai_attribute_t attr = { };
-    sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
-    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-
-    attr.id = SAI_PORT_ATTR_DROP_UNTAGGED;
-    attr.value.booldata = enable;
-    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
-    SAI_ERROR_LOG_EXIT(status, "Failed to set untagged %d for port %u",
-                       enable, hw_id);
-
-exit:
-    return SAI_ERROR_2_ERRNO(status);
-}
-
-int ops_sai_port_pvid_untag_enable_set(uint32_t hw_id, bool enable)
-{
-    ovs_assert(ops_sai_port_class()->pvid_untag_enable_set);
-    return ops_sai_port_class()->pvid_untag_enable_set(hw_id, enable);
-}
-
-int __port_pvid_untag_enable_set(uint32_t hw_id, bool enable)
-{
-    sai_attribute_t attr = { };
-    sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_oid = ops_sai_api_hw_id2port_id(hw_id);
-    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
-
-    attr.id = SAI_PORT_ATTR_CUSTOM_UNTAG_DEFAULT_VLAN;
-    attr.value.u32 = (uint32_t)enable;
-    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
-    SAI_ERROR_LOG_EXIT(status, "Failed to set __port_pvid_untag_enable_set %d for port %u",
-                       enable, hw_id);
-
-exit:
-    return SAI_ERROR_2_ERRNO(status);
-}
 /*
  * Applies all supported port configuration except from hw_enable.
  *
@@ -710,7 +717,7 @@ __set_hw_intf_config_full(uint32_t hw_id,
 {
     sai_attribute_t attr = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
-    sai_object_id_t port_id = ops_sai_api_hw_id2port_id(hw_id);
+    sai_object_id_t port_id = ops_sai_api_port_map_get_oid(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
     NULL_PARAM_LOG_ABORT(old);
@@ -737,7 +744,6 @@ __set_hw_intf_config_full(uint32_t hw_id,
         ERRNO_EXIT(status);
     }
 
-#ifndef MLNX_SAI
     if ((old->pause_tx != new->pause_tx) || (old->pause_rx != new->pause_rx)) {
         attr.id = SAI_PORT_ATTR_GLOBAL_FLOW_CONTROL;
         attr.value.u32 = sai_port_pause(new->pause_tx, new->pause_rx);
@@ -745,7 +751,6 @@ __set_hw_intf_config_full(uint32_t hw_id,
         SAI_ERROR_LOG_EXIT(status, "Failed to set pause %d for port %d",
                            new->speed, hw_id);
     }
-#endif
 
     /* TODO: Duplex - integrate with SAI. */
 
@@ -753,7 +758,6 @@ exit:
     return status;
 }
 
-#ifndef MLNX_SAI
 /*
  * Get SAI flow control mode based on tx and rx pause values.
  *
@@ -777,7 +781,118 @@ sai_port_pause(bool pause_tx, bool pause_rx)
 
     return SAI_PORT_FLOW_CONTROL_DISABLE;
 }
-#endif
+static sai_status_t
+__port_unsplit(uint32_t hw_id, uint32_t speed,
+               uint32_t sub_intf_hw_id_cnt, uint32_t *hw_id_list)
+{
+    return SAI_STATUS_NOT_SUPPORTED;
+}
+
+static sai_status_t
+__port_split_to_2(uint32_t hw_id, uint32_t speed,
+                  uint32_t sub_intf_hw_id_cnt, uint32_t *hw_id_list)
+{
+    return SAI_STATUS_NOT_SUPPORTED;
+}
+
+static sai_status_t
+__port_split_to_4(uint32_t hw_id, uint32_t speed,
+                  uint32_t sub_intf_hw_id_cnt, uint32_t *hw_id_list)
+{
+    return SAI_STATUS_NOT_SUPPORTED;
+}
+
+int ops_sai_port_ingress_filter_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->ingress_filter_set);
+    return ops_sai_port_class()->ingress_filter_set(hw_id, enable);
+}
+
+int __port_ingress_filter_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_INGRESS_FILTERING;
+    attr.value.booldata = enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set ingress filter %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
+int ops_sai_port_drop_tagged_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->drop_tagged_set);
+    return ops_sai_port_class()->drop_tagged_set(hw_id, enable);
+}
+
+int __port_drop_tagged_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_DROP_TAGGED;
+    attr.value.booldata = enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set tagged %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
+int ops_sai_port_drop_untagged_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->drop_untagged_set);
+    return ops_sai_port_class()->drop_untagged_set(hw_id, enable);
+}
+
+int __port_drop_untagged_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_DROP_UNTAGGED;
+    attr.value.booldata = enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set untagged %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
+int ops_sai_port_pvid_untag_enable_set(uint32_t hw_id, bool enable)
+{
+    ovs_assert(ops_sai_port_class()->pvid_untag_enable_set);
+    return ops_sai_port_class()->pvid_untag_enable_set(hw_id, enable);
+}
+
+int __port_pvid_untag_enable_set(uint32_t hw_id, bool enable)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_CUSTOM_UNTAG_DEFAULT_VLAN;
+    attr.value.u32 = (uint32_t)enable;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set __port_pvid_untag_enable_set %d for port %u",
+                       enable, hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
 
 DEFINE_GENERIC_CLASS(struct port_class, port) = {
         .init = __port_init,
@@ -790,6 +905,8 @@ DEFINE_GENERIC_CLASS(struct port_class, port) = {
         .pvid_get = __port_pvid_get,
         .pvid_set = __port_pvid_set,
         .stats_get = __port_stats_get,
+        .split_info_get = __port_split_info_get,
+        .split = __port_split,
         .ingress_filter_set = __port_ingress_filter_set,
         .drop_tagged_set    = __port_drop_tagged_set,
         .drop_untagged_set  = __port_drop_untagged_set,

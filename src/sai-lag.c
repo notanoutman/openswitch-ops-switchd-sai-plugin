@@ -282,7 +282,7 @@ __lag_member_port_add(int        lagid,
     attr[0].value.oid = hlag_entry->handle.data;
 
     attr[1].id = SAI_LAG_MEMBER_ATTR_PORT_ID;
-    attr[1].value.oid = ops_sai_api_hw_id2port_id(hw_id);
+    attr[1].value.oid = ops_sai_api_port_map_get_oid(hw_id);
 
     status = sai_api->lag_api->create_lag_member(&hlag_member_entry.handle.data, sizeof(attr)/sizeof(attr[0]), attr);
 

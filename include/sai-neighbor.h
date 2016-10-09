@@ -30,8 +30,7 @@ struct neighbor_class {
     int  (*create)(bool           is_ipv6_addr,
                    const char     *ip_addr,
                    const char     *mac_addr,
-                   const handle_t *rif,
-                   int            *l3_egress_id);
+                   const handle_t *rif);
     /**
      *  This function deletes a neighbour information.
      *
@@ -83,15 +82,13 @@ static inline int
 ops_sai_neighbor_create(bool           is_ipv6_addr,
                         const char     *ip_addr,
                         const char     *mac_addr,
-                        const handle_t *rifid,
-                        int            *l3_egress_id)
+                        const handle_t *rifid)
 {
     ovs_assert(ops_sai_neighbor_class()->create);
     return ops_sai_neighbor_class()->create(is_ipv6_addr,
                                             ip_addr,
                                             mac_addr,
-                                            rifid,
-                                            l3_egress_id);
+                                            rifid);
 }
 
 static inline int

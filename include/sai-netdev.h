@@ -14,7 +14,9 @@
 void netdev_sai_register(void);
 uint32_t netdev_sai_hw_id_get(struct netdev *);
 void netdev_sai_port_oper_state_changed(sai_object_id_t, int);
+void netdev_sai_port_lane_state_changed(sai_object_id_t, int);
 int netdev_sai_set_router_intf_handle(struct netdev *, const handle_t *);
+int netdev_sai_get_lane_state(struct netdev *, bool *);
 
 
 void netdev_sai_get_port_name_by_handle_id(handle_t,char *);

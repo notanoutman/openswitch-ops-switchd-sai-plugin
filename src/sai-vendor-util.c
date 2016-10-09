@@ -16,6 +16,8 @@
 #define FRU_BASE_MAC_ADDRESS_TYPE 0x24
 #define FRU_BASE_MAC_ADDRESS_LEN 6
 
+#define INIT_CONFIG_PATH_TEMPLATE "/usr/share/%s_board_config.json"
+
 VLOG_DEFINE_THIS_MODULE(sai_vendor_mlnx);
 
 struct fru_header {
@@ -170,5 +172,28 @@ __eeprom_mac_get(const uint8_t *buffer, sai_mac_t mac, int len)
     SAI_ERROR_LOG_EXIT(status, "MAC address not found in FRU EEPROM");
 
 exit:
+    return status;
+}
+
+/**
+ * Return config file path depending on system ID
+ *
+ * @param[out] - Char pointer to configuration path buffer.
+ * @param[in]  - Length of configuration path buffer.
+ *
+ * @return sai_status_t.
+ */
+sai_status_t
+ops_sai_vendor_config_path_get(char *config_path, uint32_t path_len)
+{
+    sai_status_t status = SAI_STATUS_SUCCESS;
+
+    NULL_PARAM_LOG_ABORT(config_path);
+    ovs_assert(path_len);
+
+
+    snprintf(config_path, path_len, INIT_CONFIG_PATH_TEMPLATE, "e582-48x2q4z");
+    VLOG_INFO("Config file path is: %s", config_path);
+
     return status;
 }

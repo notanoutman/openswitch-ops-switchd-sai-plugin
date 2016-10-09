@@ -36,16 +36,6 @@
 #define SAI_MIRROR_DATA_DIR_EGRESS      0x02
 #define SAI_MIRROR_DATA_DIR_BOTH        0x03
 
-typedef enum sai_mirror_porttype {
-    SAI_MIRROR_PORT_PHYSICAL,
-    SAI_MIRROR_PORT_LAG,
-} sai_mirror_porttype_t;
-
-typedef union sai_mirror_portid {
-    int                 lag_id;
-    uint32_t            hw_id;
-} sai_mirror_portid_t;
-
 struct mirror_class {
     /**
      * Initialize sai mirror module.
