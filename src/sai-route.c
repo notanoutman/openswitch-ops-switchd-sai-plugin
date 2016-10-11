@@ -13,7 +13,7 @@ VLOG_DEFINE_THIS_MODULE(sai_route);
 
 #undef malloc
 
-#define SAI_NEXT_HOP_MAX    8
+#define SAI_NEXT_HOP_MAX    32
 
 #define OPS_ROUTE_HASH_MAXSIZE 64
 
@@ -918,174 +918,6 @@ exit:
 }
 
 static int
-__sai_route_local_action(uint64_t          vrid,
-                      const char            *prefix,
-                      uint32_t              next_hop_count,
-                      char *const *const    next_hops,
-                      uint32_t              action)
-{
-    sai_status_t                    status      = SAI_STATUS_SUCCESS;
-    const struct ops_sai_api_class  *sai_api    = ops_sai_api_get_instance();
-    struct nh_entry     *p_nh_entry = NULL;
-    sai_ops_route_t     *ops_routep = NULL;
-    sai_ops_nexthop_t   *ops_nh = NULL;
-    sai_unicast_route_entry_t route;
-    sai_attribute_t     attr[3];
-    char                buf_preifx[256];
-    handle_t            l3_egress_id;
-    handle_t            l3_nhg_id;
-    handle_t            l3_id_cp;
-    uint32_t            ip_prefix   = 0;
-    uint32_t            index       = 0;
-    uint8_t             prefix_len  = 0;
-    int                 rc          = 0;
-    int                 vrf_id      = 0;
-
-    memset(buf_preifx, 0, sizeof(buf_preifx));
-    memset(&l3_egress_id, 0, sizeof(l3_egress_id));
-    memset(&l3_id_cp, 0, sizeof(l3_id_cp));
-
-    memcpy(buf_preifx, prefix, sizeof(buf_preifx));
-    rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
-    if (rc) {
-        VLOG_ERR("Invalid IPv4/Prefix");
-        return rc; /* Return error */
-    }
-
-    memset(&route, 0, sizeof(route));
-    route.vr_id = vrid;
-    route.destination.addr_family = SAI_IP_ADDR_FAMILY_IPV4;
-    route.destination.addr.ip4 = htonl(ip_prefix);
-    SAI_IPV4_LEN_TO_MASK(route.destination.mask.ip4, prefix_len);
-
-    if (action) {
-        ops_routep = ops_sai_route_lookup(vrf_id, prefix);
-        if (!ops_routep) {
-            ops_routep = ops_sai_route_add(vrf_id, prefix, next_hop_count, next_hops);
-            if (NULL != ops_routep) {
-                if (1 == ops_routep->n_nexthops) {
-                    p_nh_entry = ops_sai_route_get_nexthop(next_hops[0]);
-                    if (NULL == p_nh_entry) {
-                        rc = ops_sai_routing_nexthop_create(NULL, next_hops[0], &l3_egress_id);
-                        if (rc) {
-                            return status;
-                        }
-                    }else {
-                        l3_egress_id.data = p_nh_entry->handle.data;
-                    }
-
-                    ops_sai_route_add_nexthop(next_hops[0], &l3_egress_id);
-                    l3_id_cp.data = l3_egress_id.data;
-
-                }
-
-                /* next comes routes adding */
-                attr[0].id = SAI_ROUTE_ATTR_PACKET_ACTION;
-                attr[0].value.s32 = SAI_PACKET_ACTION_FORWARD;
-                attr[1].id = SAI_ROUTE_ATTR_NEXT_HOP_ID;
-                attr[1].value.oid = l3_id_cp.data;
-                attr[2].id = SAI_ROUTE_ATTR_TRAP_PRIORITY;
-                attr[2].value.u8 = 0;                       // default to zero
-
-                status = sai_api->route_api->create_route(&route, 3, attr);
-                SAI_ERROR_LOG_EXIT(status, "Failed to add route entry");
-
-            }
-        } else {
-            goto exit;
-        }
-    } else {
-        ops_routep = ops_sai_route_lookup(vrf_id, prefix);
-        if (!ops_routep) {
-            return status;
-        }
-
-        if (next_hops) {
-           ops_sai_route_update(vrf_id, ops_routep, next_hop_count, next_hops, true);
-            if (1 == ops_routep->n_nexthops) {
-                HMAP_FOR_EACH(ops_nh, node, &ops_routep->nexthops)
-                {
-                    p_nh_entry = ops_sai_route_get_nexthop(ops_nh->id);
-                    if (NULL != p_nh_entry) {
-                        l3_egress_id.data = p_nh_entry->handle.data;
-                    }
-                }
-
-                /* update the nhid */
-                ops_sai_routing_nexthop_id_update(&route, &l3_egress_id);
-
-                /* delete the nhid after */
-                if (OPS_ROUTE_STATE_ECMP == ops_routep->rstate) {
-                    ops_sai_routing_nh_group_del(&ops_routep->nh_ecmp);
-                }
-            }
-            else if (1 < ops_routep->n_nexthops) {
-                /* create nexthop group */
-                ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
-
-                /* update the nhid */
-                ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
-
-                /* delete the nhid after */
-                if (OPS_ROUTE_STATE_ECMP == ops_routep->rstate) {
-                    ops_sai_routing_nh_group_del(&ops_routep->nh_ecmp);
-                }
-
-                ops_routep->nh_ecmp.data = l3_nhg_id.data;
-            }
-
-            /* del the nexthop db or refer  */
-            for(index = 0; index < next_hop_count; index++)
-            {
-                p_nh_entry = ops_sai_route_get_nexthop(next_hops[index]);
-                if (NULL != p_nh_entry) {
-                    l3_egress_id.data = p_nh_entry->handle.data;
-                    rc = ops_sai_route_delete_nexthop(p_nh_entry->id);
-                    if (!rc) {
-                        rc = ops_sai_routing_nexthop_remove(&l3_egress_id);
-                    }
-                }
-            }
-        } else {
-            /* del the ipuc prefix */
-            status = sai_api->route_api->remove_route(&route);
-            SAI_ERROR_LOG_EXIT(status, "Failed to delete route entry");
-
-            if (OPS_ROUTE_STATE_ECMP == ops_routep->rstate) {
-                ops_sai_routing_nh_group_del(&ops_routep->nh_ecmp);
-            }
-
-            /* del the nexthop db or refer  */
-            HMAP_FOR_EACH(ops_nh, node, &ops_routep->nexthops)
-            {
-                p_nh_entry = ops_sai_route_get_nexthop(ops_nh->id);
-                if (NULL != p_nh_entry) {
-                    l3_egress_id.data = p_nh_entry->handle.data;
-                    rc = ops_sai_route_delete_nexthop(p_nh_entry->id);
-                    if (!rc) {
-                        rc = ops_sai_routing_nexthop_remove(&l3_egress_id);
-                    }
-                }
-            }
-
-            ops_sai_route_del(ops_routep);
-            return status;
-        }
-    }
-
-exit:
-    if (ops_routep->n_nexthops > 1) {
-        ops_routep->rstate = OPS_ROUTE_STATE_ECMP;
-    } else {
-        ops_routep->rstate = OPS_ROUTE_STATE_NON_ECMP;
-        ops_routep->nh_ecmp.data = 0;
-    }
-
-    return status;
-}
-
-
-static int
 __sai_route_remote_action(uint64_t          vrid,
                       const char            *prefix,
                       uint32_t              next_hop_count,
@@ -1269,19 +1101,19 @@ __sai_route_remote_action(uint64_t          vrid,
                         }
                     }
                 }
-		if (OPS_ROUTE_STATE_ECMP != ops_routep->rstate) {
-	             /* create nexthop group */
-	             ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
-	             ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
-	             ops_routep->nh_ecmp.data = l3_nhg_id.data;
-		     goto exit;
-	        }
 
-	        /* add nexthop member */
-		for(index = 0; index < next_hop_count; index++){
-		    ops_sai_routing_nhg_add_member(ops_routep,next_hops[index]);
-	        }
+                if (OPS_ROUTE_STATE_ECMP != ops_routep->rstate) {
+                     /* create nexthop group */
+                     ops_sai_routing_nh_group_add(ops_routep, &l3_nhg_id);
+                     ops_sai_routing_nexthop_id_update(&route, &l3_nhg_id);
+                     ops_routep->nh_ecmp.data = l3_nhg_id.data;
+                     goto exit;
+                }
 
+                /* add nexthop member */
+                for(index = 0; index < next_hop_count; index++){
+                    ops_sai_routing_nhg_add_member(ops_routep,next_hops[index]);
+                }
             }
         }
     } else {
@@ -1311,12 +1143,12 @@ __sai_route_remote_action(uint64_t          vrid,
             }
             else if (1 < ops_routep->n_nexthops) {
 
-		  /* remove nexthop member */
-		  for(index = 0; index < next_hop_count; index++){
-			ops_sai_routing_nhg_del_member(ops_routep,next_hops[index]);
-		  }
+                /* remove nexthop member */
+                for(index = 0; index < next_hop_count; index++){
+                    ops_sai_routing_nhg_del_member(ops_routep,next_hops[index]);
+                }
             } else {
-		if (ops_routep->refer_cnt) {
+            if (ops_routep->refer_cnt) {
                     /* del the ipuc prefix */
                     status = sai_api->route_api->remove_route(&route);
                     __ops_sai_route_local_add(&vrfid, prefix);
@@ -1324,9 +1156,9 @@ __sai_route_remote_action(uint64_t          vrid,
                     /* del the ipuc prefix */
                     status = sai_api->route_api->remove_route(&route);
                     ops_sai_route_del(ops_routep);
-		    return status;
-		}
-	    }
+                    return status;
+                }
+            }
             /* del the nexthop db or refer  */
             for(index = 0; index < next_hop_count; index++)
             {

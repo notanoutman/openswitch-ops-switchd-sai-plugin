@@ -2664,6 +2664,7 @@ __add_l3_host_entry(const struct ofproto *ofproto_, void *aux,
             ERRNO_EXIT(status);
         }
         __neigh_entry_hash_add(next_hop_mac_addr, ip_addr, bundle);
+        *l3_egress_id = 1;
     }
 
     exit:
@@ -2703,6 +2704,7 @@ __delete_l3_host_entry(const struct ofproto *ofproto_, void *aux,
             ERRNO_EXIT(status);
         }
         __neigh_entry_hash_remove(ip_addr, bundle);
+        *l3_egress_id = -1;
     }
 
 exit:
