@@ -49,7 +49,7 @@
 
 VLOG_DEFINE_THIS_MODULE(ofproto_sai);
 
-
+handle_t	        invalid_handle    = HANDLE_INITIALIZAER;
 
 /* All existing ofproto provider instances, indexed by ->up.name. */
 static struct hmap all_ofproto_sai = HMAP_INITIALIZER(&all_ofproto_sai);
@@ -191,6 +191,10 @@ static void __mirror_get_bundle_port_info(struct ofbundle_sai *bundle, sai_mirro
 
 void __sai_register_stg_mac_learning_plugin_init();
 static int __ofproto_stp_init();
+
+static void __ofproto_lag_port_update (int lag_handle, struct ofport_sai *port, bool add);
+static void __ofproto_lag_create(struct ofbundle_sai *bundle);
+static void __ofproto_lag_destroy(struct ofbundle_sai *bundle);
 
 const struct ofproto_class ofproto_sai_class = {
     PROVIDER_INIT_GENERIC(init,                  __init)
@@ -843,7 +847,7 @@ static int
 __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
 {
     int status = 0;
-    handle_t	portid = HANDLE_INITIALIZAER;
+//    handle_t	portid = HANDLE_INITIALIZAER;
     uint32_t hw_id = netdev_sai_hw_id_get(port->up.netdev);
 
     if (NULL == port) {
@@ -880,12 +884,13 @@ __ofbundle_port_add(struct ofbundle_sai *bundle, struct ofport_sai *port)
         }
     }
 
-    if(-1 != bundle->bond_hw_handle)
+    if(bundle->lag_info.is_lag)
     {
-        status = ops_sai_lag_member_port_add(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
-        ERRNO_LOG_EXIT(status, "Failed to add lag member port to bundle");
-	 portid.data = netdev_sai_hw_id_get(port->up.netdev);
-        ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, portid,0);
+        __ofproto_lag_port_update(bundle->lag_info.lag_id, port, true /*add*/);
+
+//	 portid.data = netdev_sai_hw_id_get(port->up.netdev);
+//       ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, portid,0);
+        sai_mac_learning_l2_addr_flush_by_port(netdev_get_name(port->up.netdev));
 
 	 if(bundle->router_intf.created){
 	     status = netdev_sai_set_router_intf_handle(port->up.netdev, &bundle->router_intf.rifid);
@@ -928,7 +933,7 @@ __ofbundle_port_del(struct ofport_sai *port)
         }
     }
 
-    if(-1 != bundle->bond_hw_handle)
+    if(bundle->lag_info.is_lag)
     {
         portid.hw_id = hw_id;
         porttype = SAI_MIRROR_PORT_PHYSICAL;
@@ -941,8 +946,7 @@ __ofbundle_port_del(struct ofport_sai *port)
             ops_sai_mirror_src_del(bundle->egress_owner->hid,
                     SAI_MIRROR_DATA_DIR_EGRESS, porttype, portid);
 
-        status = ops_sai_lag_member_port_del(bundle->bond_hw_handle,netdev_sai_hw_id_get(port->up.netdev));
-        ERRNO_LOG_EXIT(status, "Failed to remove lag member port to bundle");
+        __ofproto_lag_port_update(bundle->lag_info.lag_id, port, false /*del*/);
 
 	 if(bundle->router_intf.created){
 	     status = netdev_sai_set_router_intf_handle(port->up.netdev, NULL);
@@ -956,7 +960,7 @@ exit:
 
     return status;
 }
-
+#if 0
 /************************************ lag tx member **************************************/
 
 /*
@@ -1072,7 +1076,7 @@ exit:
 }
 
 /************************************ lag tx member end **********************************/
-
+#endif
 /*
  * Reallocate bundle trunks.
  */
@@ -1133,7 +1137,6 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
     static unsigned long added_trunks[BITMAP_N_LONGS(VLAN_BITMAP_SIZE)];
     static unsigned long common_trunks[BITMAP_N_LONGS(VLAN_BITMAP_SIZE)];
     static unsigned long removed_trunks[BITMAP_N_LONGS(VLAN_BITMAP_SIZE)];
-    handle_t			portid = HANDLE_INITIALIZAER;
 
     /* Initialize all trunks as empty. */
     bitmap_and(added_trunks, empty_trunks, VLAN_BITMAP_SIZE);
@@ -1275,12 +1278,16 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
         ovs_assert(false);
     }
 
-    if(-1 != bundle->bond_hw_handle)
-    {
-        if(tag_changed || mod_changed){
-		 ops_sai_lag_get_handle_id(bundle->bond_hw_handle, &portid);
-	        ops_sai_fdb_flush_entrys(3 /*L2MAC_FLUSH_BY_TRUNK*/, portid,0);
-	 }
+
+    if(tag_changed || mod_changed) {
+//	        ops_sai_fdb_flush_entrys(3 /*L2MAC_FLUSH_BY_TRUNK*/, bundle->lag_info.lag_hw_handle,0);
+        if(bundle->lag_info.is_lag) {
+            sai_mac_learning_l2_addr_flush_by_tid(bundle->lag_info.lag_id);
+        }else{
+            LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+                sai_mac_learning_l2_addr_flush_by_port(netdev_get_name(port->up.netdev));
+            }
+        }
     }
 
     bundle->vlan = s->vlan;
@@ -1299,13 +1306,13 @@ __ofbundle_ports_reconfigure(struct ofbundle_sai *bundle,
     bool port_found = false;
     int status = 0;
     struct ofport_sai *port = NULL, *next_port = NULL, *s_port = NULL;
-
+#if 0
     if(-1 != bundle->bond_hw_handle)
     {
         status = __lag_tx_member_reconfigure(bundle, s, 0);
         ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
     }
-
+#endif
     /* Figure out which ports were removed. */
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
         port_found = false;
@@ -1344,13 +1351,13 @@ __ofbundle_ports_reconfigure(struct ofbundle_sai *bundle,
         }
         ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
     }
-
+#if 0
     if(-1 != bundle->bond_hw_handle)
     {
         status = __lag_tx_member_reconfigure(bundle, s, 1);
         ERRNO_LOG_EXIT(status, "Failed to reconfigure ports");
     }
-
+#endif
 exit:
     return status;
 }
@@ -1456,14 +1463,11 @@ __ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
     } else {
         rif_type = ROUTER_INTF_TYPE_PORT;
 
-	 if(strncmp(s->name,"lag",3) == 0) {
-		if(bundle->bond_hw_handle != -1) {
-			status = ops_sai_lag_get_handle_id(bundle->bond_hw_handle, &handle);
-			ERRNO_EXIT(status);
-		}
-     }else{
-        handle.data = ops_sai_api_port_map_get_oid(netdev_sai_hw_id_get(port->up.netdev));
-	 }
+	if(bundle->lag_info.is_lag) {
+	    handle = bundle->lag_info.lag_hw_handle;
+       }else{
+           handle.data = ops_sai_api_port_map_get_oid(netdev_sai_hw_id_get(port->up.netdev));
+	}
     }
 
     if (bundle->router_intf.created &&
@@ -1492,7 +1496,15 @@ __ofbundle_router_intf_reconfigure(struct ofbundle_sai *bundle,
             __ofbundle_lag_intf_mac_reconfigure(s->name);
         }
 
-	 ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, handle,0);
+	 if (STR_EQ(netdev_type, OVSREC_INTERFACE_TYPE_SYSTEM)) {
+//		 ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, handle,0);
+		 if(bundle->lag_info.is_lag) {
+			sai_mac_learning_l2_addr_flush_by_tid(bundle->lag_info.lag_id);
+		 }else{
+		       port = __get_ofp_port(ofproto, s->slaves[0]);
+			sai_mac_learning_l2_addr_flush_by_port(netdev_get_name(port->up.netdev));
+		 }
+	 }
     }
 
     if (bundle->router_intf.created &&
@@ -1956,9 +1968,11 @@ __ofbundle_create(struct ofproto_sai *ofproto, void *aux,
 
     __bundle_cache_init(bundle);
 
-    bundle->bond_hw_handle = -1;
-//    list_init(&bundle->number_ports);
-    list_init(&bundle->tx_number_ports);
+    bundle->lag_info.is_lag = false;
+    bundle->lag_info.lag_id = -1;
+    bundle->lag_info.lag_hw_handle = invalid_handle;
+    list_init(&bundle->lag_info.tx_number_ports);
+
     list_init(&bundle->ingress_node);
     list_init(&bundle->egress_node);
 
@@ -1972,8 +1986,6 @@ static void
 __ofbundle_destroy(struct ofbundle_sai *bundle, bool delete_config_only)
 {
     int status = 0;
-    handle_t            handle;
-    struct port         *port_      = NULL;
     struct ofport_sai *port = NULL, *next_port = NULL;
     struct ofmirror_sai	*mir = NULL, *n_mir = NULL;
     struct ofproto_sai  *ofproto_sai = NULL;
@@ -1983,8 +1995,6 @@ __ofbundle_destroy(struct ofbundle_sai *bundle, bool delete_config_only)
     if (NULL == bundle) {
         return;
     }
-
-    port_ = (struct port *)bundle->aux;
 
     if (!bundle->config_cache.cache_config) {
         status = __ofbundle_ip_remove(bundle);
@@ -2028,7 +2038,7 @@ __ofbundle_destroy(struct ofbundle_sai *bundle, bool delete_config_only)
 		        }
 		    }
 		}
-
+#if 0
 		if (bundle->bond_hw_handle != -1) {
 		 LIST_FOR_EACH_SAFE(port, next_port, bundle_tx_lag_node, &bundle->tx_number_ports) {
 		        status = __ofbundle_lag_tx_port_del(port);
@@ -2037,7 +2047,7 @@ __ofbundle_destroy(struct ofbundle_sai *bundle, bool delete_config_only)
 		                  bundle->name);
 		    }
 		}
-
+#endif
 		LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
 		    status = __ofbundle_port_del(port);
 		    ERRNO_LOG(status,
@@ -2045,13 +2055,10 @@ __ofbundle_destroy(struct ofbundle_sai *bundle, bool delete_config_only)
 		              bundle->name);
 		}
 
-		if (bundle->bond_hw_handle != -1) {
-		 ops_sai_lag_get_handle_id(bundle->bond_hw_handle,&handle);
-		    ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, handle,bundle->vlan);
-
-		    ops_sai_lag_remove(bundle->bond_hw_handle);
-		    bundle->bond_hw_handle = -1;
-		    port_->bond_hw_handle = bundle->bond_hw_handle;
+		if (bundle->lag_info.is_lag) {
+		    sai_mac_learning_l2_addr_flush_by_tid(bundle->lag_info.lag_id);
+//		    ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, bundle->lag_info.lag_hw_handle,bundle->vlan);
+		    __ofproto_lag_destroy(bundle);
 		}
 	}
 
@@ -2120,38 +2127,77 @@ __ofbundle_lookup_by_netdev_name(struct ofproto_sai *ofproto,
     return NULL;
 }
 
+static void
+__ofproto_lag_port_update (int lag_id, struct ofport_sai *port, bool add)
+{
+    int rc = 0;
+
+    VLOG_INFO("__ofproto_lag_port_update: lag %d port %s add %d",
+                    lag_id, netdev_get_name(port->up.netdev), add);
+
+    if (add) {
+	 rc = ops_sai_lag_member_port_add(lag_id, netdev_sai_hw_id_get(port->up.netdev));
+    } else {
+        rc = ops_sai_lag_member_port_del(lag_id, netdev_sai_hw_id_get(port->up.netdev));
+    }
+
+    if (rc) {
+        VLOG_ERR("__ofproto_lag_port_update failed for lag %d port %s add %d : rc %d",
+                    lag_id, netdev_get_name(port->up.netdev), add, rc);
+    }
+}
+
+static void __ofproto_lag_create(struct ofbundle_sai *bundle)
+{
+    struct port         *port_              = NULL;
+    struct ofport_sai *port = NULL, *next_port = NULL;
+
+    ops_sai_lag_create(&bundle->lag_info.lag_id);
+
+    if(bundle->lag_info.lag_id == -1){
+        VLOG_ERR("__ofproto_lag_create: create lag error; name = %s",bundle->name);
+	 return ;
+    }
+
+    bundle->lag_info.is_lag = true;
+    ops_sai_lag_get_handle_id(bundle->lag_info.lag_id, &bundle->lag_info.lag_hw_handle);
+
+    port_ = (struct port *)bundle->aux;
+    port_->bond_hw_handle = 1;
+
+    LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+        __ofproto_lag_port_update(bundle->lag_info.lag_id, port, true /*add*/);
+    }
+}
+
+static void __ofproto_lag_destroy(struct ofbundle_sai *bundle)
+{
+    struct port         *port_              = NULL;
+    struct ofport_sai *port = NULL, *next_port = NULL;
+
+    LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+        __ofproto_lag_port_update(bundle->lag_info.lag_id, port, false /*del*/);
+    }
+
+    ops_sai_lag_remove(bundle->lag_info.lag_id);
+
+    bundle->lag_info.is_lag = false;
+    bundle->lag_info.lag_id = 1;
+
+    port_ = (struct port *)bundle->aux;
+    port_->bond_hw_handle = -1;
+}
+
+
 static int
 __ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
                                const struct ofproto_bundle_settings *s)
 {
     int                 status      = 0;
-    handle_t	    hand_id;
-    struct port         *port_      = NULL;
 
-    if (-1 == bundle->bond_hw_handle) {
-        if(s->hw_bond_should_exist || s->bond_handle_alloc_only) {
-            ops_sai_lag_create(&bundle->bond_hw_handle);
-
-            port_->bond_hw_handle = bundle->bond_hw_handle;
-#if 0
-            if (s->bond_handle_alloc_only) {
-                return 0;
-            }
-#endif
-        }else{
-            return 0;
-        }
-    } else if(false == s->hw_bond_should_exist){
-	ops_sai_lag_get_handle_id(bundle->bond_hw_handle,&hand_id);
-        ops_sai_fdb_flush_entrys(1 /*L2MAC_FLUSH_BY_PORT*/, hand_id,bundle->vlan);
-
-        ops_sai_lag_remove(bundle->bond_hw_handle);
-
-        bundle->bond_hw_handle = -1;
-
-        port_->bond_hw_handle = bundle->bond_hw_handle;
-
-        return 0;
+    /* lag interface always hw_bond_should_exist = true */
+    if(s->hw_bond_should_exist && bundle->lag_info.lag_id == -1){
+        __ofproto_lag_create(bundle);
     }
 
     return status;
@@ -2203,7 +2249,8 @@ __bundle_set(struct ofproto *ofproto_, void *aux,
         status = 0;
         goto exit;
     }
-	status = __ofbundle_lag_reconfigure(bundle, s);
+
+    status = __ofbundle_lag_reconfigure(bundle, s);
     ERRNO_LOG_EXIT(status, "Failed to set bundle lag");
 
     status = __ofbundle_ports_reconfigure(bundle, s);
@@ -2241,12 +2288,12 @@ __bundle_remove(struct ofport *port_)
     if (NULL == bundle) {
         return;
     }
-
+#if 0
     if (bundle->bond_hw_handle != -1) {
         status = __ofbundle_lag_tx_port_del(port);
         ERRNO_LOG(status,"Failed to remove tx bundle");
     }
-
+#endif
     status = __ofbundle_port_del(port);
     ERRNO_LOG_EXIT(status, "Failed to remove bundle");
 
@@ -2296,6 +2343,11 @@ __is_bundle_active(struct ofproto *ofproto_,
 
         return lane_state;
     } else if (s) {
+        /* fix lag check member port */
+        if(STRN_EQ(s->name,"lag",strlen("lag"))){
+            return true;
+        }
+
         port = __get_ofp_port(ofproto, *s->slaves);
 
         if (!port) {
@@ -3023,23 +3075,20 @@ ofbundle_get_port_name_by_handle_id(handle_t    port_id,
 {
     struct ofproto_sai  *ofproto_sai  = NULL;
     struct ofbundle_sai *ofbundle_sai = NULL;
-    handle_t            hand_id       = HANDLE_INITIALIZAER;
 
     HMAP_FOR_EACH(ofproto_sai, all_ofproto_sai_node, &all_ofproto_sai) {
         if (STR_EQ(ofproto_sai->up.type,SAI_INTERFACE_TYPE_SYSTEM))
         {
             HMAP_FOR_EACH(ofbundle_sai, hmap_node, &ofproto_sai->bundles) {
-                if(-1 == ofbundle_sai->bond_hw_handle)
+                if(!ofbundle_sai->lag_info.is_lag)
                     continue;
 
-                if (!ops_sai_lag_get_handle_id(ofbundle_sai->bond_hw_handle, &hand_id))
+                if(HANDLE_EQ(&ofbundle_sai->lag_info.lag_hw_handle,&port_id))
                 {
-                    if(HANDLE_EQ(&hand_id,&port_id))
-                    {
-                        strcpy(str,ofbundle_sai->name);
-                        return 0;
-                    }
+                    strcpy(str,ofbundle_sai->name);
+                    return 0;
                 }
+
             }
         }
     }
@@ -3048,7 +3097,7 @@ ofbundle_get_port_name_by_handle_id(handle_t    port_id,
 }
 
 int
-ofbundle_get_handle_id_by_port_name(const char *name, handle_t *handle_id)
+ofbundle_get_handle_id_by_tid(const int tid, handle_t *handle_id)
 {
     struct ofproto_sai  *ofproto_sai  = NULL;
     struct ofbundle_sai *ofbundle_sai = NULL;
@@ -3059,18 +3108,13 @@ ofbundle_get_handle_id_by_port_name(const char *name, handle_t *handle_id)
         if (STR_EQ(ofproto_sai->up.type,SAI_INTERFACE_TYPE_SYSTEM))
         {
             HMAP_FOR_EACH(ofbundle_sai, hmap_node, &ofproto_sai->bundles) {
-                if(-1 == ofbundle_sai->bond_hw_handle)
+                if(!ofbundle_sai->lag_info.is_lag)
                     continue;
 
-                if(STR_EQ(name, ofbundle_sai->name))
+                if(ofbundle_sai->lag_info.lag_id == tid)
                 {
-                    if (!ops_sai_lag_get_handle_id(ofbundle_sai->bond_hw_handle, handle_id))
-                    {
-
-                        return true;
-                    }
-
-                    return false;
+		      *handle_id = ofbundle_sai->lag_info.lag_hw_handle;
+                    return true;
                 }
             }
         }
@@ -3085,7 +3129,7 @@ ofbundle_get_handle_id_by_port_name(const char *name, handle_t *handle_id)
 static bool
 bundle_is_a_lag (struct ofbundle_sai *bundle)
 {
-    return bundle->bond_hw_handle >= 0;
+    return bundle->lag_info.is_lag;
 }
 
 /*
@@ -3104,9 +3148,9 @@ __mirror_get_bundle_port_info(struct ofbundle_sai *bundle,
     /* port is a lag */
     if (bundle_is_a_lag(bundle)) {
         if (pt) *pt = SAI_MIRROR_PORT_LAG;
-        (*portid).lag_id = bundle->bond_hw_handle;
+        (*portid).lag_id = bundle->lag_info.lag_id;
         VLOG_DBG("bundle %s (0x%p) *IS* a lag (lagid %d)",
-                bundle->name, bundle, bundle->bond_hw_handle);
+                bundle->name, bundle, bundle->lag_info.lag_id);
         return;
     }
 

@@ -479,7 +479,6 @@ __port_pvid_set(uint32_t hw_id, sai_vlan_id_t pvid)
     sai_attribute_t attr = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
     sai_vlan_id_t old_vid = 0;
-    handle_t        handle;
     sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
@@ -496,11 +495,6 @@ __port_pvid_set(uint32_t hw_id, sai_vlan_id_t pvid)
     status = sai_api->port_api->set_port_attribute(port_oid, &attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to set pvid %d for port %u",
                        pvid, hw_id);
-
-    handle.data = ops_sai_api_port_map_get_oid(hw_id);
-    status = ops_sai_fdb_flush_entrys(2/*L2MAC_FLUSH_BY_PORT_VLAN*/, handle, old_vid);
-    SAI_ERROR_LOG_EXIT(status, "Failed to ops_sai_fdb_flush_entrys vid %d for port %u",
-                       old_vid, hw_id);
 
 exit:
     return SAI_ERROR_2_ERRNO(status);

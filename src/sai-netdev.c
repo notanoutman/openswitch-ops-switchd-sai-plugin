@@ -849,7 +849,7 @@ __get_features(const struct netdev *netdev_, enum netdev_features *current,
     SAI_API_TRACE_FN();
 
     ovs_mutex_lock(&netdev->mutex);
-    if (netdev->is_initialized && netdev->split_info.is_hw_lane_active) {
+    if (!netdev->is_initialized || !netdev->split_info.is_hw_lane_active) {
         goto exit;
     }
 

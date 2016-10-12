@@ -17,4 +17,8 @@ extern int sai_mac_learning_get_hmap(struct mlearn_hmap **mhmap);
 
 extern int sai_mac_learning_l2_addr_flush_handler(mac_flush_params_t *settings);
 
+extern int sai_mac_learning_l2_addr_flush_by_port(const char *name);
+extern int sai_mac_learning_l2_addr_flush_by_tid(int tid);
+extern int sai_mac_learning_l2_addr_flush_by_vlan(int vid);
+
 #endif /* __SAI_MAC_LEARNING_H__ */

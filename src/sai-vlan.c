@@ -336,7 +336,6 @@ __trunks_port_set(const unsigned long *trunks, uint32_t hw_id, bool add)
 {
     int vid = 0;
     int status = 0;
-    handle_t	handle = HANDLE_INITIALIZAER;
 
     NULL_PARAM_LOG_ABORT(trunks);
 
@@ -349,10 +348,6 @@ __trunks_port_set(const unsigned long *trunks, uint32_t hw_id, bool add)
             ERRNO_EXIT(status);
 
             status = ops_sai_port_pvid_untag_enable_set(hw_id, true);
-            ERRNO_EXIT(status);
-
-	     handle.data = ops_sai_api_port_map_get_oid(hw_id);
-	     status = ops_sai_fdb_flush_entrys(2 /*L2MAC_FLUSH_BY_PORT_VLAN*/, handle,vid);
             ERRNO_EXIT(status);
         }
     }

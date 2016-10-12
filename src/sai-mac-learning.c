@@ -46,7 +46,7 @@ struct ovs_mutex mlearn_mutex = OVS_MUTEX_INITIALIZER;
  */
 struct mlearn_hmap all_macs_learnt[MAX_BUFFERS] OVS_GUARDED_BY(mlearn_mutex);
 
-#define TIMER_THREAD_TIMEOUT 60
+#define TIMER_THREAD_TIMEOUT 20
 static pthread_t sai_timer_thread;
 
 static int current_hmap_in_use = 0 OVS_GUARDED_BY(mlearn_mutex);
@@ -114,23 +114,6 @@ sai_mac_learning_get_port_name_from_id(handle_t port_id, char* port_name)
     return ;
 }
 
-static int
-sai_mac_learning_get_id_from_port_name(char* port_name, handle_t *hand_id)
-{
-    uint32_t hw_id = 0;
-
-    if(true == netdev_sai_get_hw_id_by_name(port_name, &hw_id))  {
-	 VLOG_INFO("%s: hw_id = 0x%x ", __FUNCTION__, hw_id);
-        hand_id->data = ops_sai_api_port_map_get_oid(hw_id);
-        return 0;
-    } else if(true == ofbundle_get_handle_id_by_port_name(port_name,hand_id)) {
-        VLOG_INFO("%s: port_id: %lx ", __FUNCTION__,hand_id->data);
-        return 0;
-    }
-
-    return -1;
-}
-
 /*
  * Function: sai_mac_learning_entry_add
  *
@@ -176,10 +159,6 @@ sai_mac_learning_entry_add(	struct mlearn_hmap 	*hmap_entry,
 
     HMAP_FOR_EACH_WITH_HASH (entry, hmap_node, hash,
                                  &(hmap_entry->table)) {
-        VLOG_DBG("%s: cur_tables, port: %s, oper: %d, vlan: %d, MAC: %s",
-                     __FUNCTION__, entry->port_name, entry->oper, entry->vlan,
-                     ether_ntoa((struct ether_addr *)entry->mac.ea));
-
         if ((entry->vlan == vlan) && eth_addr_equals(entry->mac, mac_eth)) {
             if ((event == MLEARN_ADD) && (entry->oper == MLEARN_DEL)) {
                 if (0 == strcmp(port_name,entry->port_name) /* port_id == entry->port */) {
@@ -206,7 +185,9 @@ sai_mac_learning_entry_add(	struct mlearn_hmap 	*hmap_entry,
                                 vlan, ether_ntoa((struct ether_addr *)entry->mac.ea));
                     found = true;
                 }
-            } else if ((event == MLEARN_DEL) && (entry->oper == MLEARN_DEL)) {
+            }
+#if 0
+		else if ((event == MLEARN_DEL) && (entry->oper == MLEARN_DEL)) {
                 /*
                  * update this entry from hmap
                  */
@@ -217,17 +198,17 @@ sai_mac_learning_entry_add(	struct mlearn_hmap 	*hmap_entry,
                     VLOG_DBG("%s: update event, entry found removing to removing", __FUNCTION__);
                     found = true;
                 }
-            } else if ((event == MLEARN_ADD) && (entry->oper == MLEARN_ADD)) {
+            }
+#endif
+		else if ((event == MLEARN_ADD) && (entry->oper == MLEARN_ADD)) {
                 /*
                  * update this entry from hmap
                  */
-                if (0 == strcmp(port_name,entry->port_name) /* port_id == entry->port */) {
-                    /*
-                     * update this entry from hmap
-                     */
-                    VLOG_DBG("%s: update event, entry found adding to adding", __FUNCTION__);
-                    found = true;
-                }
+                VLOG_DBG("%s: update event, entry found update port %s -> %s", __FUNCTION__, entry->port_name, port_name);
+
+                strncpy(entry->port_name, port_name, PORT_NAME_SIZE);
+
+                found = true;
             }
         }
     }
@@ -236,7 +217,7 @@ sai_mac_learning_entry_add(	struct mlearn_hmap 	*hmap_entry,
         if (actual_size < (hmap_entry->buffer).size) {
             struct mlearn_hmap_node *mlearn_node =
                                     &((hmap_entry->buffer).nodes[actual_size]);
-            VLOG_DBG("%s: move_event, port: %lx, oper: %d, vlan: %d, MAC: %s",
+            VLOG_DBG("%s: add new mac event, port: %lx, oper: %d, vlan: %d, MAC: %s",
                      __FUNCTION__, port_id.data, event, vlan,
                      ether_ntoa((struct ether_addr *)mac));
 
@@ -437,6 +418,36 @@ sai_mac_learning_init(void)
     return 0;
 }
 
+int sai_mac_learning_l2_addr_flush_by_port(const char *name)
+{
+    mac_flush_params_t settings;
+
+    strncpy(settings.port_name, name, PORT_NAME_SIZE);
+    settings.options = L2MAC_FLUSH_BY_PORT;
+
+    return sai_mac_learning_l2_addr_flush_handler(&settings);
+}
+
+int sai_mac_learning_l2_addr_flush_by_tid(int tid)
+{
+    mac_flush_params_t settings;
+
+    settings.options = L2MAC_FLUSH_BY_TRUNK;
+    settings.tgid      = tid;
+
+    return sai_mac_learning_l2_addr_flush_handler(&settings);
+}
+
+int sai_mac_learning_l2_addr_flush_by_vlan(int vid)
+{
+    mac_flush_params_t settings;
+
+    settings.options = L2MAC_FLUSH_BY_VLAN;
+    settings.vlan     = vid;
+
+    return sai_mac_learning_l2_addr_flush_handler(&settings);
+}
+
 /*
  * Function: sai_mac_learning_l2_addr_flush_handler
  *
@@ -446,16 +457,31 @@ sai_mac_learning_init(void)
 int
 sai_mac_learning_l2_addr_flush_handler(mac_flush_params_t *settings)
 {
-    int                 rc  = 0;
-    handle_t            id  = HANDLE_INITIALIZAER;
+    int                rc  = 0;
+    uint32_t        hw_id = 0;
+    handle_t       id  = HANDLE_INITIALIZAER;
 
-    /* Get Harware Port */
-    if (settings->options == L2MAC_FLUSH_BY_PORT
-        || settings->options == L2MAC_FLUSH_BY_PORT_VLAN
-        || settings->options == L2MAC_FLUSH_BY_TRUNK
-        || settings->options == L2MAC_FLUSH_BY_TRUNK_VLAN) {
-        rc = sai_mac_learning_get_id_from_port_name(settings->port_name, &id);
-        if (rc) {
+    /* Get Harware Port by port name */
+     if (settings->options == L2MAC_FLUSH_BY_PORT ||
+	   settings->options == L2MAC_FLUSH_BY_PORT_VLAN) {
+
+        if (false == netdev_sai_get_hw_id_by_name(settings->port_name, &hw_id)) {
+            VLOG_ERR_RL(&mac_learning_rl, "%s: %s name not found flags %u mode %d",
+                        __FUNCTION__, settings->port_name,
+                        settings->flags,
+                        settings->options);
+
+            return -1; /* Return error */
+        }
+
+        id.data = ops_sai_api_port_map_get_oid(hw_id);
+    }
+
+    /* Get Harware Port by tid */
+    if (settings->options == L2MAC_FLUSH_BY_TRUNK ||
+        settings->options == L2MAC_FLUSH_BY_TRUNK_VLAN) {
+
+        if (false == ofbundle_get_handle_id_by_tid(settings->tgid, &id)) {
             VLOG_ERR_RL(&mac_learning_rl, "%s: %s name not found flags %u mode %d",
                         __FUNCTION__, settings->port_name,
                         settings->flags,
@@ -465,5 +491,10 @@ sai_mac_learning_l2_addr_flush_handler(mac_flush_params_t *settings)
         }
     }
 
-    return ops_sai_fdb_flush_entrys(settings->options, id, settings->vlan);
+    rc = ops_sai_fdb_flush_entrys(settings->options, id, settings->vlan);
+
+    /* flush fdb need use mac_learning_tigger_callback now */
+    sai_mac_learning_run();
+
+    return rc;
 }

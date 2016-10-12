@@ -82,9 +82,14 @@ struct ofbundle_sai {
         struct ofproto_bundle_settings *config;
         struct hmap local_routes;
     } config_cache;
+
     /* LAG Info */
-    int             bond_hw_handle;
-    struct ovs_list tx_number_ports;        /* Contains "struct ofport"s. */
+    struct {
+        int                      is_lag;
+	 int 			     lag_id;
+        handle_t             lag_hw_handle;
+        struct ovs_list    tx_number_ports;        /* Contains "struct ofport"s. */
+    }lag_info;
 
     /* Mirror info */
     struct ovs_list     ingress_node;
@@ -163,6 +168,6 @@ int ofproto_sai_bundle_enable(const char *);
 int ofproto_sai_bundle_disable(const char *);
 
 int ofbundle_get_port_name_by_handle_id(handle_t, char*);
-int ofbundle_get_handle_id_by_port_name(const char *, handle_t *);
+int ofbundle_get_handle_id_by_tid(const int tid, handle_t *);
 
 #endif /* sai-ofproto-provider.h */

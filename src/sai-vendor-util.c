@@ -16,7 +16,7 @@
 #define FRU_BASE_MAC_ADDRESS_TYPE 0x24
 #define FRU_BASE_MAC_ADDRESS_LEN 6
 
-#define INIT_CONFIG_PATH_TEMPLATE "/usr/share/%s_board_config.json"
+#define INIT_CONFIG_PATH_TEMPLATE "/etc/spec/%s_board_config.json"
 
 VLOG_DEFINE_THIS_MODULE(sai_vendor_mlnx);
 

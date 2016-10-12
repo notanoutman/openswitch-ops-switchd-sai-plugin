@@ -64,6 +64,8 @@
 #define VLAN_ID_MAX         4094
 
 #define STR_EQ(str1, str2)      (strcmp(str1, str2) == 0)
+#define STRN_EQ(str1, str2,len)      (strncmp(str1, str2,len) == 0)
+
 
 #define OPS_SAI_SET_FLAG(VAL,FLAG)          (VAL) = (VAL) | (FLAG)
 #define OPS_SAI_UNSET_FLAG(VAL,FLAG)        (VAL) = (VAL) & ~(FLAG)
