@@ -85,7 +85,7 @@ __ecmp_hash_set(uint64_t fields_to_set, bool enable)
 
     memset(attr, 0, sizeof(attr));
 
-    hash_type = __ecmp_hash_type_ofproto_to_sai(fields_to_set);
+    //hash_type = __ecmp_hash_type_ofproto_to_sai(fields_to_set);
     if (enable) {
         if (!OPS_SAI_FLAG_ISSET(hash_field, fields_to_set)) {
             OPS_SAI_SET_FLAG(hash_field, fields_to_set);
@@ -123,7 +123,7 @@ __ecmp_hash_set(uint64_t fields_to_set, bool enable)
 
     status = sai_api->switch_api->set_switch_attribute(attr);
 
-    SAI_ERROR_LOG_EXIT(status, "Failed to set ecmp hash fields");
+    //SAI_ERROR_LOG_EXIT(status, "Failed to set ecmp hash fields");
 
     if (OPS_SAI_FLAG_ISSET(hash_field, OFPROTO_ECMP_HASH_RESILIENT)) {
         //need_update = true;
