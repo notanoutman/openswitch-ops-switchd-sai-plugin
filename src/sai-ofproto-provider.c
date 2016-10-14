@@ -1278,15 +1278,18 @@ __vlan_reconfigure(struct ofbundle_sai *bundle,
         ovs_assert(false);
     }
 
-
+    /* flush fdb entry */
     if(tag_changed || mod_changed) {
-//	        ops_sai_fdb_flush_entrys(3 /*L2MAC_FLUSH_BY_TRUNK*/, bundle->lag_info.lag_hw_handle,0);
         if(bundle->lag_info.is_lag) {
             sai_mac_learning_l2_addr_flush_by_tid(bundle->lag_info.lag_id);
         }else{
             LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
                 sai_mac_learning_l2_addr_flush_by_port(netdev_get_name(port->up.netdev));
             }
+        }
+    }else if(!bitmap_equal(removed_trunks, empty_trunks, VLAN_BITMAP_SIZE)){
+        LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+            sai_mac_learning_l2_addr_flush_by_port(netdev_get_name(port->up.netdev));
         }
     }
 
@@ -2163,7 +2166,7 @@ static void __ofproto_lag_create(struct ofbundle_sai *bundle)
     ops_sai_lag_get_handle_id(bundle->lag_info.lag_id, &bundle->lag_info.lag_hw_handle);
 
     port_ = (struct port *)bundle->aux;
-    port_->bond_hw_handle = 1;
+    port_->bond_hw_handle = bundle->lag_info.lag_id;
 
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
         __ofproto_lag_port_update(bundle->lag_info.lag_id, port, true /*add*/);

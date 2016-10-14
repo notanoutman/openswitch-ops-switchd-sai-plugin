@@ -16,7 +16,7 @@
 #define FRU_BASE_MAC_ADDRESS_TYPE 0x24
 #define FRU_BASE_MAC_ADDRESS_LEN 6
 
-#define INIT_CONFIG_PATH_TEMPLATE "/etc/spec/%s_board_config.json"
+#define INIT_CONFIG_PATH_TEMPLATE "/etc/spec/board_config.json"
 
 VLOG_DEFINE_THIS_MODULE(sai_vendor_mlnx);
 
@@ -192,7 +192,7 @@ ops_sai_vendor_config_path_get(char *config_path, uint32_t path_len)
     ovs_assert(path_len);
 
 
-    snprintf(config_path, path_len, INIT_CONFIG_PATH_TEMPLATE, "e582-48x2q4z");
+    snprintf(config_path, path_len, INIT_CONFIG_PATH_TEMPLATE);
     VLOG_INFO("Config file path is: %s", config_path);
 
     return status;
