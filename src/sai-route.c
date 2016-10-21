@@ -24,6 +24,9 @@ VLOG_DEFINE_THIS_MODULE(sai_route);
         (mask) = (len) ? ~((1 << (COPS_IPV4_ADDR_LEN_IN_BIT - (len))) - 1) : 0; \
     }
 
+#define SAI_OBJECT_TYPE_SET(objtype,index)  					\
+    (((sai_object_id_t)objtype << 32) | (sai_object_id_t)index)
+
 struct hmap all_nexthop     = HMAP_INITIALIZER(&all_nexthop);
 struct hmap all_route       = HMAP_INITIALIZER(&all_route);
 struct hmap all_if_addr     = HMAP_INITIALIZER(&all_if_addr);
@@ -742,12 +745,12 @@ exit:
 }
 
 static int
-__ops_sai_route_local_add(const handle_t *vrid, const char *prefix)
+__ops_sai_route_local_add(const handle_t *vrid, const char *prefix, const handle_t *rifid)
 {
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
     sai_unicast_route_entry_t route;
-    sai_attribute_t attr[2];
+    sai_attribute_t attr[3];
     uint32_t    ip_prefix = 0;
     char        buf_preifx[256];
     int         rc = 0;
@@ -760,9 +763,15 @@ __ops_sai_route_local_add(const handle_t *vrid, const char *prefix)
 
     attr[0].id = SAI_ROUTE_ATTR_PACKET_ACTION;
     attr[0].value.s32 = SAI_PACKET_ACTION_TRAP;
+    attr[1].id = SAI_ROUTE_ATTR_NEXT_HOP_ID + 1; //For map attr of SAI_ROUTE_ATTR_RIF_ID
+    if (!rifid) {
+        attr[1].value.oid = SAI_OBJECT_TYPE_SET(SAI_OBJECT_TYPE_ROUTER_INTERFACE, 1);
+    } else {
+        attr[1].value.oid = rifid->data;
+    }
 
-    attr[1].id = SAI_ROUTE_ATTR_TRAP_PRIORITY;
-    attr[1].value.u8 = 0;              // default to zero
+    attr[2].id = SAI_ROUTE_ATTR_TRAP_PRIORITY;
+    attr[2].value.u8 = 0;              // default to zero
 
     memcpy(buf_preifx, prefix, sizeof(buf_preifx));
     rc = ops_string_to_prefix(buf_preifx, &ip_prefix, &prefix_len);
@@ -777,7 +786,7 @@ __ops_sai_route_local_add(const handle_t *vrid, const char *prefix)
     route.destination.addr.ip4 = htonl(ip_prefix);
     SAI_IPV4_LEN_TO_MASK(route.destination.mask.ip4, prefix_len);
 
-    status = sai_api->route_api->create_route(&route, 2, attr);
+    status = sai_api->route_api->create_route(&route, 3, attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to add route entry");
 
 exit:
@@ -1151,7 +1160,7 @@ __sai_route_remote_action(uint64_t          vrid,
             if (ops_routep->refer_cnt) {
                     /* del the ipuc prefix */
                     status = sai_api->route_api->remove_route(&route);
-                    __ops_sai_route_local_add(&vrfid, prefix);
+                    __ops_sai_route_local_add(&vrfid, prefix, NULL);
                 } else {
                     /* del the ipuc prefix */
                     status = sai_api->route_api->remove_route(&route);
@@ -1239,7 +1248,7 @@ __route_local_add(const handle_t *vrid,
             return status;
         }
 
-        __ops_sai_route_local_add(vrid, prefix);
+        __ops_sai_route_local_add(vrid, prefix, rifid);
         /* need to check when mask is 32 */
 
     } else {
