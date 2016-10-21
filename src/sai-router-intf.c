@@ -236,7 +236,7 @@ static int __router_intf_set_state(const handle_t *rif_handle, bool state)
     memset(attr, 0, sizeof(attr));
     attr[0].id = SAI_ROUTER_INTERFACE_ATTR_ADMIN_V4_STATE;
     attr[0].value.booldata = state;
-    status = sai_api->rif_api->set_router_interface_attribute(rif_handle, attr);
+    status = sai_api->rif_api->set_router_interface_attribute(rif_handle->data, attr);
     SAI_ERROR_LOG_EXIT(status, "Failed to set router interface state");
 exit:
     return status;
