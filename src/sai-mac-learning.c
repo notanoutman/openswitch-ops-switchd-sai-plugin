@@ -24,12 +24,15 @@ VLOG_DEFINE_THIS_MODULE(sai_mac_learning);
 static struct vlog_rate_limit mac_learning_rl = VLOG_RATE_LIMIT_INIT(5, 20);
 
 /*
- * The buffers are defined as 2 because:
- *    To allow simultaneous read access to bridge.c and ops-mac-learning.c code
- *    threads will be: __init thread, switchd main thread and thread created for
- *    bcm callback without worrying about wait for acquiring the lock.
+ * The buffers are defined as 20 because:
+ *    1:
+ *      To allow simultaneous read access to bridge.c and ops-mac-learning.c code
+ *      threads will be: __init thread, switchd main thread and thread created for
+ *      bcm callback without worrying about wait for acquiring the lock.
+ *    2:
+ *      BUFFER_SIZE(16384) * 20; centec fdb entry max 128km learn & flush msg = 128k * 2 = 236k;
  */
-#define MAX_BUFFERS   2
+#define MAX_BUFFERS   20
 
 /*
  * mlearn_mutex is the mutex going to be used to access the all_macs_learnt and
@@ -50,6 +53,13 @@ struct mlearn_hmap all_macs_learnt[MAX_BUFFERS] OVS_GUARDED_BY(mlearn_mutex);
 static pthread_t sai_timer_thread;
 
 static int current_hmap_in_use = 0 OVS_GUARDED_BY(mlearn_mutex);
+static int cur_read_hmap_in_use = 0 OVS_GUARDED_BY(mlearn_mutex);
+
+#define MACS_TABLES_IS_FULL					((current_hmap_in_use+1) % MAX_BUFFERS == cur_read_hmap_in_use)
+#define MACS_TABLES_IS_EMPTY					(cur_read_hmap_in_use == current_hmap_in_use)
+#define MACS_TABLES_GET_NEXT_INDEX(index)         ((index + 1) % MAX_BUFFERS)
+
+static int next_sleep_timer_in_sec = TIMER_THREAD_TIMEOUT;
 
 static struct mac_learning_plugin_interface *p_mlearn_plugin_interface = NULL;
 
@@ -276,8 +286,15 @@ sai_mac_learning_run (void)
         ovs_mutex_lock(&mlearn_mutex);
         if (hmap_count(&(all_macs_learnt[current_hmap_in_use].table))) {
             p_mlearn_interface->mac_learning_trigger_callback();
-            current_hmap_in_use = current_hmap_in_use ^ 1;
-            sai_mac_learning_clear_hmap(&all_macs_learnt[current_hmap_in_use]);
+
+	     /* check macs tables is full */
+	     if(!MACS_TABLES_IS_FULL) {
+                current_hmap_in_use = MACS_TABLES_GET_NEXT_INDEX(current_hmap_in_use) ;
+                sai_mac_learning_clear_hmap(&all_macs_learnt[current_hmap_in_use]);
+	         VLOG_DBG("%s: current hmap_in_use: %d", __FUNCTION__, current_hmap_in_use);
+	     }else{
+		  VLOG_DBG("%s: current hmap_in_use is full: %d", __FUNCTION__, current_hmap_in_use);
+	     }
         }
         ovs_mutex_unlock(&mlearn_mutex);
     } else {
@@ -308,6 +325,7 @@ sai_mac_learning_fdb_event_cb(  uint32_t count,
         {
             case SAI_FDB_EVENT_LEARNED:
                 ovs_mutex_lock(&mlearn_mutex);
+	         VLOG_DBG("%s: current hmap_in_use: %d", __FUNCTION__, current_hmap_in_use);
                 sai_mac_learning_entry_add(&all_macs_learnt[current_hmap_in_use],
                               data[fdb_index].fdb_entry.mac_address,
                               data[fdb_index].fdb_entry.vlan_id,
@@ -319,6 +337,7 @@ sai_mac_learning_fdb_event_cb(  uint32_t count,
 
             case SAI_FDB_EVENT_AGED:
                 ovs_mutex_lock(&mlearn_mutex);
+		  VLOG_DBG("%s: current hmap_in_use: %d", __FUNCTION__, current_hmap_in_use);
                 sai_mac_learning_entry_add(&all_macs_learnt[current_hmap_in_use],
                               data[fdb_index].fdb_entry.mac_address,
                               data[fdb_index].fdb_entry.vlan_id,
@@ -346,9 +365,46 @@ sai_mac_learning_fdb_event_cb(  uint32_t count,
 static void *
 sai_mac_learning_timer_main (void * args OVS_UNUSED)
 {
+    struct mac_learning_plugin_interface *p_mlearn_interface = NULL;
+    int delay_time = 0;
+
     while (true) {
-        xsleep(TIMER_THREAD_TIMEOUT); 		/* in seconds */
-        sai_mac_learning_run();
+        xsleep(next_sleep_timer_in_sec); 		/* in seconds */
+//        sai_mac_learning_run();
+
+        p_mlearn_interface = get_plugin_mac_learning_interface();
+        if(!p_mlearn_interface)
+			continue;
+
+        if(MACS_TABLES_IS_EMPTY){
+		VLOG_DBG("%s: empty macs tables", __FUNCTION__);
+
+		/* if fdb is empty, then check current macs table is empty? */
+		sai_mac_learning_run();
+
+		delay_time = 0;
+        }else{
+		p_mlearn_interface->mac_learning_trigger_callback();
+
+		/* calc next sleep timer count */
+		 if(current_hmap_in_use > cur_read_hmap_in_use){
+			delay_time = current_hmap_in_use - cur_read_hmap_in_use;
+		 }else{
+			delay_time = current_hmap_in_use + MAX_BUFFERS - cur_read_hmap_in_use;
+		 }
+        }
+
+	 if(delay_time >= 10){
+		next_sleep_timer_in_sec = 5;
+	 }else if(delay_time < 10 && delay_time >= 7){
+		next_sleep_timer_in_sec = 10;
+	 }else if(delay_time < 7  &&  delay_time >= 3){
+		next_sleep_timer_in_sec = 15;
+	 }else{
+		next_sleep_timer_in_sec = 20;
+	 }
+
+	 VLOG_DBG("%s: next sleep timer : %d", __FUNCTION__, next_sleep_timer_in_sec);
     }
 
     return (NULL);
@@ -369,11 +425,23 @@ int sai_mac_learning_get_hmap(struct mlearn_hmap **mhmap)
     }
 
     ovs_mutex_lock(&mlearn_mutex);
-    if (hmap_count(&(all_macs_learnt[current_hmap_in_use ^ 1].table))) {
-        *mhmap = &all_macs_learnt[current_hmap_in_use ^ 1];
+
+    /* if macs table is empty, then return */
+    if(MACS_TABLES_IS_EMPTY){
+	 VLOG_DBG("%s: empt, current read hmap_in_use == current hmap_in_use: %d", __FUNCTION__, cur_read_hmap_in_use);
+	 ovs_mutex_unlock(&mlearn_mutex);
+        return (0);
+    }
+    VLOG_DBG("%s: current read hmap_in_use: %d", __FUNCTION__, cur_read_hmap_in_use);
+    if (hmap_count(&(all_macs_learnt[cur_read_hmap_in_use].table))) {
+        *mhmap = &all_macs_learnt[cur_read_hmap_in_use];
     } else {
         *mhmap = NULL;
     }
+
+    cur_read_hmap_in_use = MACS_TABLES_GET_NEXT_INDEX(cur_read_hmap_in_use);
+
+    VLOG_DBG("%s: change current read hmap_in_use: %d", __FUNCTION__, cur_read_hmap_in_use);
     ovs_mutex_unlock(&mlearn_mutex);
 
     return (0);
