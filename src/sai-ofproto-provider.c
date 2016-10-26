@@ -2068,13 +2068,14 @@ __ofbundle_destroy(struct ofbundle_sai *bundle, bool delete_config_only)
     if (!delete_config_only) {
         __ofbundle_rename(bundle, NULL);
         __trunks_realloc(bundle, NULL);
+        __bundle_cache_free(bundle);
         hmap_destroy(&bundle->ipv4_secondary);
         hmap_destroy(&bundle->ipv6_secondary);
         hmap_destroy(&bundle->local_routes);
         hmap_destroy(&bundle->neighbors);
         hmap_remove(&bundle->ofproto->bundles, &bundle->hmap_node);
 
-        __bundle_cache_free(bundle);
+        //__bundle_cache_free(bundle);
 
         free(bundle);
     }

@@ -369,7 +369,11 @@ __host_intf_netdev_create(const char *name,
     hostif_attrib[1].id = SAI_HOSTIF_ATTR_NAME;
     strcpy(hostif_attrib[1].value.chardata, name);
     hostif_attrib[2].id = SAI_HOSTIF_ATTR_RIF_OR_PORT_ID;
-    hostif_attrib[2].value.oid = ops_sai_api_port_map_get_oid(handle->data);
+    if (0 != strncmp(name, "vlan", 4)) {
+        hostif_attrib[2].value.oid = ops_sai_api_port_map_get_oid(handle->data);
+    } else {
+        hostif_attrib[2].value.oid = vlan_id;
+    }
 
     status = sai_api->host_interface_api->create_hostif(&hif_id_port,
                                                         ARRAY_SIZE(hostif_attrib),
