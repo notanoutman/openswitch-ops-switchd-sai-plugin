@@ -59,11 +59,15 @@ static void __dealloc(struct netdev *);
 static int __set_hw_intf_info(struct netdev *, const struct smap *);
 static int __set_hw_intf_info_internal(struct netdev *netdev_,
                                                 const struct smap *args);
+static int __set_hw_intf_info_loopback(struct netdev *netdev_,
+                                                const struct smap *args);
 static bool __args_autoneg_get(const struct smap *, bool);
 static bool __args_duplex_get(const struct smap *, bool);
 static int __args_pause_get(const struct smap *, bool, bool);
 static int __set_hw_intf_config(struct netdev *, const struct smap *);
 static int __set_hw_intf_config_internal(struct netdev *,
+                                                  const struct smap *);
+static int __set_hw_intf_config_loopback(struct netdev *,
                                                   const struct smap *);
 static int __set_etheraddr_full(struct netdev *, const struct eth_addr mac);
 static int __set_etheraddr(struct netdev *, const struct eth_addr mac);
@@ -193,8 +197,8 @@ static const struct netdev_class netdev_sai_loopback_class = NETDEV_SAI_CLASS(
         "loopback",
         __construct,
         __destruct,
-        NULL,
-        NULL,
+        __set_hw_intf_info_loopback,
+        __set_hw_intf_config_loopback,
         __update_flags_loopback,
         NULL,
         NULL);
@@ -534,6 +538,29 @@ exit:
     return status;
 }
 
+static int
+__set_hw_intf_info_loopback(struct netdev *netdev_,
+                                     const struct smap *args)
+{
+    int status = 0;
+    struct netdev_sai *netdev = __netdev_sai_cast(netdev_);
+
+    SAI_API_TRACE_FN();
+
+    ovs_mutex_lock(&netdev->mutex);
+
+    if (netdev->is_initialized) {
+        goto exit;
+    }
+
+    netdev->is_initialized = true;
+    /* HW lane of L3 netdevs is always active */
+    netdev->split_info.is_hw_lane_active = true;
+
+exit:
+    ovs_mutex_unlock(&netdev->mutex);
+    return status;
+}
 
 /*
  * Read autoneg value from smap arguments.
@@ -652,6 +679,21 @@ __set_hw_intf_config_internal(struct netdev *netdev_, const struct smap *args)
     return 0;
 }
 
+static int
+__set_hw_intf_config_loopback(struct netdev *netdev_, const struct smap *args)
+{
+    struct netdev_sai *netdev = __netdev_sai_cast(netdev_);
+    const char *enable = smap_get(args, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE);
+
+    SAI_API_TRACE_FN();
+
+    if (enable) {
+        netdev->netdev_internal_admin_state =
+                STR_EQ(enable, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE_TRUE);
+    }
+
+    return 0;
+}
 
 /*
  * Cache MAC address.
