@@ -597,6 +597,8 @@ __port_stats_get(uint32_t hw_id, struct netdev_stats *stats)
                                                STAT_IDX_COUNT, counters);
     SAI_ERROR_LOG_EXIT(status, "Failed to get stats for port %d", hw_id);
 
+    memset(stats, 0, sizeof *stats);
+
 #if 1
     stats->rx_packets = counters[STAT_IDX_IF_IN_PKTS];
     stats->tx_packets = counters[STAT_IDX_IF_OUT_PKTS];
@@ -888,6 +890,28 @@ exit:
     return SAI_ERROR_2_ERRNO(status);
 }
 
+int ops_sai_port_sample_packet_set(uint32_t hw_id, handle_t id)
+{
+    ovs_assert(ops_sai_port_class()->sample_packet_set);
+    return ops_sai_port_class()->sample_packet_set(hw_id, id);
+}
+
+int __port_sample_packet_set(uint32_t hw_id, handle_t id)
+{
+    sai_attribute_t attr = { };
+    sai_status_t status = SAI_STATUS_SUCCESS;
+    sai_object_id_t port_oid = ops_sai_api_port_map_get_oid(hw_id);
+    const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
+
+    attr.id = SAI_PORT_ATTR_INGRESS_SAMPLEPACKET_ENABLE;
+    attr.value.oid = id.data;
+    status = sai_api->port_api->set_port_attribute(port_oid, &attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to set __port_sample_packet_set %lx for port %u",id.data,hw_id);
+
+exit:
+    return SAI_ERROR_2_ERRNO(status);
+}
+
 DEFINE_GENERIC_CLASS(struct port_class, port) = {
         .init = __port_init,
         .config_get = __port_config_get,
@@ -905,6 +929,7 @@ DEFINE_GENERIC_CLASS(struct port_class, port) = {
         .drop_tagged_set    = __port_drop_tagged_set,
         .drop_untagged_set  = __port_drop_untagged_set,
         .pvid_untag_enable_set = __port_pvid_untag_enable_set,
+	.sample_packet_set = __port_sample_packet_set,
         .deinit = __port_deinit,
 };
 

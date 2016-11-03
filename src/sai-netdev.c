@@ -21,6 +21,7 @@
 #include <sai-host-intf.h>
 #include <sai-router-intf.h>
 #include <sai-ofproto-provider.h>
+#include <sai-netdev.h>
 
 VLOG_DEFINE_THIS_MODULE(netdev_sai);
 
@@ -1415,6 +1416,20 @@ netdev_sai_get_hw_id_by_name(const char *name, uint32_t *hw_id)
     else {
         return false;
     }
+}
+
+struct netdev *
+netdev_get_by_hand_id(handle_t port_id)
+{
+    struct netdev_sai *dev = NULL, *next_dev = NULL;
+
+    LIST_FOR_EACH_SAFE(dev, next_dev, list_node, &sai_netdev_list) {
+        if (dev->is_initialized
+            && ops_sai_api_port_map_get_oid(dev->hw_id) == port_id.data) {
+            return &(dev->up);
+        }
+    }
+    return NULL;
 }
 
 int
