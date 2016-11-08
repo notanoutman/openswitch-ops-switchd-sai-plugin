@@ -32,31 +32,23 @@ int
 __policer_create(handle_t *handle,
                  const struct ops_sai_policer_config *config)
 {
-    sai_attribute_t attr[7] = { };
+    sai_attribute_t attr[1] = { };
     sai_status_t status = SAI_STATUS_SUCCESS;
     const struct ops_sai_api_class *sai_api = ops_sai_api_get_instance();
 
     NULL_PARAM_LOG_ABORT(handle);
     NULL_PARAM_LOG_ABORT(config);
 
-    attr[0].id = SAI_POLICER_ATTR_METER_TYPE;
-    attr[0].value.u32 = SAI_METER_TYPE_PACKETS;
-    attr[1].id = SAI_POLICER_ATTR_MODE;
-    attr[1].value.u32 = SAI_POLICER_MODE_Sr_TCM;
-    attr[2].id = SAI_POLICER_ATTR_CBS;
-    attr[2].value.u64 = config->burst_max;
-    attr[3].id = SAI_POLICER_ATTR_CIR;
-    attr[3].value.u64 = config->rate_max;
-    attr[4].id = SAI_POLICER_ATTR_PBS;
-    attr[4].value.u64 = config->burst_max;
-    attr[5].id = SAI_POLICER_ATTR_PIR;
-    attr[5].value.u64 = config->rate_max;
-    attr[6].id = SAI_POLICER_ATTR_RED_PACKET_ACTION;
-    attr[6].value.s32 = SAI_PACKET_ACTION_DROP;
+    attr[0].id = SAI_POLICER_ATTR_PIR;
+    attr[0].value.u64 = config->rate_max;
 
     status = sai_api->policer_api->create_policer(&handle->data,
                                                  ARRAY_SIZE(attr),
                                                  attr);
+    SAI_ERROR_LOG_EXIT(status, "Failed to create policer");
+
+    status = sai_api->policer_api->set_policer_attribute(handle->data,
+                                                 &attr[0]);
     SAI_ERROR_LOG_EXIT(status, "Failed to create policer");
 
 exit:

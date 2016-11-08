@@ -424,7 +424,7 @@ __host_intf_traps_register(void)
 
     VLOG_INFO("Registering traps");
 
-    for (i = 0; i < ARRAY_SIZE(trap_group_config_table); ++i) {
+    for (i = 0; i < /* ARRAY_SIZE(trap_group_config_table) */ 3 /* only support 3 groups */; ++i) {
         /* create entry */
         group_entry = xzalloc(sizeof *group_entry);
 
@@ -447,12 +447,17 @@ __host_intf_traps_register(void)
         SAI_ERROR_LOG_ABORT(status, "Failed to create group %s",
                             trap_group_config_table[i].name);
 
+	 status = sai_api->host_interface_api->set_trap_group_attribute(group_entry->trap_group.data,
+                                                                       &attr[1]);
+        SAI_ERROR_LOG_ABORT(status, "Failed to create group %s",
+                            trap_group_config_table[i].name);
+#if 0
         /* register traps */
         __traps_bind(trap_group_config_table[i].trap_ids,
                      &group_entry->trap_group,
                      trap_group_config_table[i].is_l3,
                      trap_group_config_table[i].is_log);
-
+#endif
         strncpy(group_entry->name, trap_group_config_table[i].name,
                 sizeof(group_entry->name));
         group_entry->name[strnlen(group_entry->name,
@@ -511,7 +516,6 @@ __traps_bind(const int *trap_ids, const handle_t *group, bool is_l3,
     NULL_PARAM_LOG_ABORT(trap_ids);
 
     for (i = 0; trap_ids[i] != -1; i++) {
-#if 0
         attr.id = SAI_HOSTIF_TRAP_ATTR_PACKET_ACTION;
         attr.value.u32 = is_log ? SAI_PACKET_ACTION_LOG
                                 : SAI_PACKET_ACTION_TRAP;
@@ -525,13 +529,12 @@ __traps_bind(const int *trap_ids, const handle_t *group, bool is_l3,
 #ifdef MLNX_SAI
                                : SAI_HOSTIF_TRAP_CHANNEL_L2_NETDEV;
 #else
-                               : SAI_HOSTIF_TRAP_CHANNEL_NETDEV;
+                               : SAI_HOSTIF_TRAP_CHANNEL_CB;
 #endif
         status = sai_api->host_interface_api->set_trap_attribute(trap_ids[i],
                                                                  &attr);
         SAI_ERROR_LOG_ABORT(status, "Failed to set trap channel, id %d",
                             trap_ids[i]);
-#endif
         attr.id = SAI_HOSTIF_TRAP_ATTR_TRAP_GROUP;
         attr.value.oid = (sai_object_id_t)group->data;
         status = sai_api->host_interface_api->set_trap_attribute(trap_ids[i],
