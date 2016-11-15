@@ -389,6 +389,15 @@ __host_intf_netdev_create(const char *name,
 
     __sai_host_intf_entry_hmap_add(&sai_host_intf, &hif);
 
+    char    sysctl_name[256];
+    int     rpf_en = 0;
+
+    memset(sysctl_name, 0, sizeof(sysctl_name));
+    snprintf(sysctl_name, sizeof(sysctl_name),
+            "sysctl -w net.ipv4.conf.%s.rp_filter=%d > /dev/null",
+            hif.name,rpf_en);
+    system(sysctl_name);
+
 exit:
     return status;
 }
@@ -451,6 +460,11 @@ __host_intf_traps_register(void)
                                                                        &attr[1]);
         SAI_ERROR_LOG_ABORT(status, "Failed to create group %s",
                             trap_group_config_table[i].name);
+
+        status = sai_api->host_interface_api->set_user_defined_trap_attribute(SAI_HOSTIF_TRAP_ID_CUSTOM_RANGE_BASE, &attr[1]);
+        status = sai_api->host_interface_api->set_user_defined_trap_attribute(SAI_HOSTIF_TRAP_ID_CUSTOM_RANGE_BASE + 1, &attr[1]);
+        status = sai_api->host_interface_api->set_user_defined_trap_attribute(SAI_HOSTIF_TRAP_ID_CUSTOM_RANGE_BASE + 2, &attr[1]);
+
 #if 0
         /* register traps */
         __traps_bind(trap_group_config_table[i].trap_ids,
