@@ -12,7 +12,9 @@
 #include <util.h>
 #include <sai-vendor.h>
 #include <sai-common.h>
-
+#include <ofproto/ofproto-provider.h>
+#include "sai-ofproto-notification.h"
+#include <sai-ofproto-provider.h>
 
 VLOG_DEFINE_THIS_MODULE(sai_api_class);
 
@@ -142,6 +144,10 @@ ops_sai_api_init(void)
 
     status = sai_api_query(SAI_API_VIRTUAL_ROUTER,
                            (void **) &sai_api.router_api);
+    SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI virtual router api");
+
+    status = sai_api_query(SAI_API_SAMPLEPACKET,
+                           (void **) &sai_api.samplepacket_api);
     SAI_ERROR_LOG_EXIT(status, "Failed to initialize SAI virtual router api");
 
     status = __init_ports();
@@ -331,6 +337,20 @@ __event_switch_shutdown(void)
     SAI_API_TRACE_FN();
 }
 
+const sai_attribute_t *
+find_attrib_in_list(uint32_t attr_count, const sai_attribute_t * attr_list, sai_attr_id_t attrib_id)
+{
+    int ii = 0;
+
+    for (ii = 0; ii < attr_count; ii++) {
+         if (attr_list[ii].id == attrib_id) {
+             return &attr_list[ii];
+         }
+     }
+
+    return 0;
+}
+
 /*
  * Function will be called by SAI on rx packet.
  */
@@ -338,7 +358,49 @@ static void
 __event_rx_packet(const void *buffer, sai_size_t buffer_size,
                   uint32_t attr_count, const sai_attribute_t * attr_list)
 {
+    struct notification_params  params;
+    const sai_attribute_t             *trap_id;
+    const sai_attribute_t             *ingress_oid;
+    const sai_attribute_t             *vlan_id;
+    struct netdev               *netdev;
+    handle_t                          handle;
+    static char 				*packets = NULL;
+
     SAI_API_TRACE_FN();
+
+    if(packets == NULL){
+	packets = xmalloc(9600 * sizeof(char));
+	if(packets == NULL){
+		return ;
+	}
+    }
+
+    memcpy(packets, buffer, buffer_size);
+
+    params.packet_params.buffer = packets;
+    params.packet_params.buffer_size = buffer_size;
+
+    trap_id = find_attrib_in_list(attr_count,attr_list,SAI_HOSTIF_PACKET_TRAP_ID);
+    ingress_oid = find_attrib_in_list(attr_count,attr_list,SAI_HOSTIF_PACKET_INGRESS_PORT);
+    vlan_id = find_attrib_in_list(attr_count,attr_list,SAI_HOSTIF_PACKET_VLAN_ID);
+
+    ovs_assert(trap_id != NULL);
+    ovs_assert(ingress_oid != NULL);
+    ovs_assert(vlan_id != NULL);
+
+    params.packet_params.trap_id = trap_id->value.s32;
+    params.packet_params.vlan_id = vlan_id->value.u16;
+
+    handle.data = ingress_oid->value.oid;
+    netdev = netdev_get_by_hand_id(handle);
+
+    ovs_assert(netdev != NULL);
+
+    params.packet_params.netdev_ = netdev;
+
+    execute_notification_block(&params, BLK_NOTIFICATION_SWITCH_PACKET);
+
+    return ;
 }
 
 /*

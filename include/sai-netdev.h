@@ -18,8 +18,8 @@ void netdev_sai_port_lane_state_changed(sai_object_id_t, int);
 int netdev_sai_set_router_intf_handle(struct netdev *, const handle_t *);
 int netdev_sai_get_lane_state(struct netdev *, bool *);
 
-
-void netdev_sai_get_port_name_by_handle_id(handle_t,char *);
-bool netdev_sai_get_hw_id_by_name(const char *, uint32_t *);
+struct netdev * netdev_get_by_hand_id(handle_t port_id);
+int netdev_sai_get_port_name_by_handle_id(handle_t,char *);
+int netdev_sai_get_hw_id_by_name(const char *, uint32_t *);
 int  netdev_sai_get_etheraddr(const struct netdev *netdev, struct eth_addr *mac);
 #endif /* sai-netdev.h */

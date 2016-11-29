@@ -184,6 +184,16 @@ struct port_class {
     int (*pvid_untag_enable_set)(uint32_t hw_id, bool enable);
 
     /*
+     * Sample packet set.
+     *
+     * @param[in] hw_id parent port HW lane id.
+     * @param[in] sflow handle id.
+     *
+     * @return 0, sai status converted to errno otherwise.
+     */
+    int (*sample_packet_set)(uint32_t hw_id, handle_t id);
+
+    /*
      * De-initialize port functionality.
      */
     void (*deinit)(void);
@@ -225,7 +235,7 @@ int ops_sai_port_ingress_filter_set(uint32_t, bool);
 int ops_sai_port_drop_tagged_set(uint32_t, bool);
 int ops_sai_port_drop_untagged_set(uint32_t, bool);
 int ops_sai_port_pvid_untag_enable_set(uint32_t, bool);
-
+int ops_sai_port_sample_packet_set(uint32_t, handle_t);
 void ops_sai_port_deinit(void);
 
 #endif /* sai-port.h */

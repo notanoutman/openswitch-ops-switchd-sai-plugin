@@ -19,6 +19,7 @@
 #include <vswitch-idl.h>
 #include <openswitch-idl.h>
 #include <ofproto/ofproto-provider.h>
+#include <sai-ofproto-sflow.h>
 
 const struct ofproto_class ofproto_sai_class;
 
@@ -33,6 +34,8 @@ struct ofproto_sai {
     struct sset ghost_ports;    /* Ports with no datapath port. */
     handle_t vrid;
     struct hmap mirrors;        /* type of struct ofmirror_sai */
+
+    struct sai_sflow *sflow;
 };
 
 struct ofport_sai {
@@ -42,6 +45,8 @@ struct ofport_sai {
 
     struct ofbundle_sai *tx_lag_bundle;        /* Bundle that contains this port */
     struct ovs_list bundle_tx_lag_node;        /* In struct ofbundle's "tx_number_ports" list. */
+
+    ofp_port_t    odp_port;
 };
 
 struct ofbundle_sai {
@@ -161,6 +166,13 @@ ofproto_sai_cast(const struct ofproto *ofproto)
     ovs_assert(ofproto);
     ovs_assert(ofproto->ofproto_class == &ofproto_sai_class);
     return CONTAINER_OF(ofproto, struct ofproto_sai, up);
+}
+
+inline struct ofport_sai *
+ofport_sai_cast(const struct ofport *ofport)
+{
+    ovs_assert(ofport);
+    return CONTAINER_OF(ofport, struct ofport_sai, up);
 }
 
 void ofproto_sai_register(void);

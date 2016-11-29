@@ -42,6 +42,9 @@
 #include "asic-plugin.h"
 #include <netinet/ether.h>
 #include "bridge.h"
+#include "sai-ofproto-notification.h"
+#include <sai-sflow.h>
+#include <sai-ofproto-sflow.h>
 
 #define SAI_INTERFACE_TYPE_SYSTEM "system"
 #define SAI_INTERFACE_TYPE_VRF "vrf"
@@ -196,6 +199,9 @@ static void __ofproto_lag_port_update (int lag_handle, struct ofport_sai *port, 
 static void __ofproto_lag_create(struct ofbundle_sai *bundle);
 static void __ofproto_lag_destroy(struct ofbundle_sai *bundle);
 
+static int __set_sflow(struct ofproto *ofproto_, const struct ofproto_sflow_options *sflow_options);
+static void __packet_received(struct notification_params *notification_params);
+
 const struct ofproto_class ofproto_sai_class = {
     PROVIDER_INIT_GENERIC(init,                  __init)
     PROVIDER_INIT_GENERIC(enumerate_types,       __enumerate_types)
@@ -245,7 +251,7 @@ const struct ofproto_class ofproto_sai_class = {
     PROVIDER_INIT_GENERIC(packet_out,            __packet_out)
     PROVIDER_INIT_GENERIC(set_netflow,           NULL)
     PROVIDER_INIT_GENERIC(get_netflow_ids,       NULL)
-    PROVIDER_INIT_GENERIC(set_sflow,             NULL)
+    PROVIDER_INIT_GENERIC(set_sflow,             __set_sflow)
     PROVIDER_INIT_GENERIC(set_ipfix,             NULL)
     PROVIDER_INIT_GENERIC(set_cfm,               NULL)
     PROVIDER_INIT_GENERIC(cfm_status_changed,    NULL)
@@ -424,10 +430,13 @@ __init(const struct shash *iface_hints)
     ops_sai_lag_init();
     ops_sai_stp_init();
     ops_sai_fdb_init();
-
+    sai_sflow_init();
     __ofproto_stp_init();
     sai_mac_learning_init();
     __sai_register_stg_mac_learning_plugin_init();
+
+    register_notification_callback(__packet_received,
+            BLK_NOTIFICATION_SWITCH_PACKET,NO_PRIORITY);
 }
 
 static void
@@ -537,6 +546,8 @@ __construct(struct ofproto *ofproto_)
         ERRNO_EXIT(error);
     }
 
+    ofproto->sflow = sai_sflow_create();
+
 exit:
     return error;
 }
@@ -592,7 +603,24 @@ __port_alloc(void)
 static int
 __port_construct(struct ofport *port_)
 {
+    struct ofport_sai *port = ofport_sai_cast(port_);
+    struct ofproto_sai *ofproto = ofproto_sai_cast(port->up.ofproto);
+    const struct netdev *netdev = port->up.netdev;
+    struct ofproto_port sai_if_port;
+    const char      *sai_port_name;
+    int error;
+
     SAI_API_TRACE_FN();
+
+    sai_port_name = netdev_get_name(netdev);
+    error = ofproto_port_query_by_name(&ofproto->up, sai_port_name,
+                                    &sai_if_port);
+    if (error) {
+        return error;
+    }
+
+    port->odp_port = sai_if_port.ofp_port;
+    ofproto_port_destroy(&sai_if_port);
 
     return 0;
 }
@@ -951,6 +979,13 @@ __ofbundle_port_del(struct ofport_sai *port)
 	 if(bundle->router_intf.created){
 	     status = netdev_sai_set_router_intf_handle(port->up.netdev, NULL);
             ERRNO_EXIT(status);
+	 }
+    }
+
+    /* sflow */
+    if (bundle->ofproto->sflow) {
+        if(sai_sflow_port_in_list(bundle->ofproto->sflow, netdev_sai_hw_id_get(port->up.netdev)) == 0){
+	     sai_sflow_del_port(bundle->ofproto->sflow, netdev_sai_hw_id_get(port->up.netdev));
 	 }
     }
 
@@ -2207,6 +2242,57 @@ __ofbundle_lag_reconfigure(struct ofbundle_sai *bundle,
     return status;
 }
 
+static int
+__ofbundle_sflow_reconfigure(struct ofbundle_sai *bundle,
+                               const struct ofproto_bundle_settings *s)
+{
+    struct ofport_sai *port      = NULL;
+    struct ofport_sai *next_port = NULL;
+    const char        *type = NULL;
+
+    /* sFlow config on port. true - enable sFlow; false - disable sFlow */
+    bool sflow_enabled = smap_get_bool(s->port_options[PORT_OTHER_CONFIG],
+                             PORT_OTHER_CONFIG_SFLOW_PER_INTERFACE_KEY_STR,
+                             true);
+    if (s->name &&
+        strncmp(s->name, DEFAULT_BRIDGE_NAME, strlen(DEFAULT_BRIDGE_NAME)) == 0) {
+        VLOG_DBG("sFlow will not be configured on bridge_normal");
+    } else {
+        /* Loop through all the 'ports' under a 'bundle' and
+           enable/disable sFlow sampling on all of them. */
+        LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+            type = netdev_get_type(port->up.netdev);
+
+            if(strncmp(bundle->name, "lag",strlen("lag")) == 0){
+                ;
+            }
+
+            /* sFlow is only supported on physical(system) interfaces */
+            if (strcmp(type, OVSREC_INTERFACE_TYPE_SYSTEM) == 0) {
+                VLOG_DBG("sflow on port %s is %s", bundle->name,
+                         (sflow_enabled)?"ENABLED":"DISABLED");
+
+                if (bundle->ofproto->sflow) {
+                    if(sflow_enabled) {
+                        if(sai_sflow_port_in_list(bundle->ofproto->sflow, netdev_sai_hw_id_get(port->up.netdev)) != 0){
+                            sai_sflow_add_port(bundle->ofproto->sflow, &port->up, netdev_sai_hw_id_get(port->up.netdev));
+                        }
+                    }else{
+                        if(sai_sflow_port_in_list(bundle->ofproto->sflow, netdev_sai_hw_id_get(port->up.netdev)) == 0){
+                            sai_sflow_del_port(bundle->ofproto->sflow, netdev_sai_hw_id_get(port->up.netdev));
+                        }
+                    }
+                }
+            } else {
+                VLOG_DBG("sFlow is not applicable for port %s of type %s",
+                         bundle->name, type);
+                break;
+            }
+        }
+    }
+
+    return 0;
+}
 /*
  * Apply bundle settings.
  */
@@ -2260,6 +2346,8 @@ __bundle_set(struct ofproto *ofproto_, void *aux,
     status = __ofbundle_ports_reconfigure(bundle, s);
     ERRNO_LOG_EXIT(status, "Failed to reconfigure ports (bundle_name: %s)",
                    s->name);
+
+    status = __ofbundle_sflow_reconfigure(bundle, s);
 
     if (STR_EQ(ofproto_->type, SAI_INTERFACE_TYPE_VRF)) {
         status = __ofbundle_router_intf_reconfigure(bundle, s);
@@ -2996,17 +3084,29 @@ __l3_ecmp_hash_set(const struct ofproto *ofprotop, unsigned int hash,
 }
 
 static int
-__run(struct ofproto *ofproto)
+__run(struct ofproto *ofproto_)
 {
+    struct ofproto_sai *ofproto = ofproto_sai_cast(ofproto_);
+
     SAI_API_TRACE_FN();
+
+    if (ofproto->sflow) {
+        sai_sflow_run(ofproto->sflow);
+    }
 
     return 0;
 }
 
 static void
-__wait(struct ofproto *ofproto)
+__wait(struct ofproto *ofproto_)
 {
+    struct ofproto_sai *ofproto = ofproto_sai_cast(ofproto_);
+
     SAI_API_TRACE_FN();
+
+    if (ofproto->sflow) {
+        sai_sflow_wait(ofproto->sflow);
+    }
 }
 
 static void
@@ -3571,4 +3671,49 @@ void __sai_register_stg_mac_learning_plugin_init()
 
     register_plugin_extension(&sai_extension);
     VLOG_INFO("The %s asic plugin interface was registered", ASIC_PLUGIN_INTERFACE_NAME);
+}
+
+static int
+__set_sflow(struct ofproto *ofproto_,
+          const struct ofproto_sflow_options *sflow_options)
+{
+    struct ofproto_sai *ofproto = ofproto_sai_cast(ofproto_);
+    struct sai_sflow *ds = ofproto->sflow;
+
+    if (sflow_options) {
+        if (ds) {
+	    sai_sflow_set_options(ds, sflow_options);
+        }
+    } else {
+        if (ds) {
+            sai_sflow_destroy(ds);
+        }
+    }
+
+    return 0;
+}
+
+static void __packet_received(struct notification_params *notification_params)
+{
+    struct ofproto              *ofproto_ = NULL;
+    struct ofproto_sai          *ofproto;
+
+
+    ofproto_ = ofproto_lookup(DEFAULT_VRF_NAME);
+
+    if(!ofproto_)
+        return ;
+
+    ofproto = ofproto_sai_cast(ofproto_);
+
+    /* sflow */
+    if(notification_params->packet_params.trap_id == SAI_HOSTIF_TRAP_ID_SAMPLEPACKET && ofproto->sflow) {
+
+	 if(ofproto->sflow) {
+            sai_sflow_received(ofproto->sflow,
+                        notification_params->packet_params.buffer,
+                        notification_params->packet_params.buffer_size,
+                        netdev_sai_hw_id_get(notification_params->packet_params.netdev_));
+        }
+    }
 }
