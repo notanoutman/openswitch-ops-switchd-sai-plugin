@@ -270,14 +270,14 @@ __port_stats_get(uint32_t hw_id,  SFLIf_counters *counters)
 
 
     counters->ifInOctets = port_counters[STAT_IDX_IF_IN_OCTETS];
-    counters->ifInUcastPkts = port_counters[SAI_PORT_STAT_IF_IN_PKTS];
+    counters->ifInUcastPkts = port_counters[STAT_IDX_IF_IN_PKTS];
     counters->ifInMulticastPkts = port_counters[STAT_IDX_IF_IN_MULTICAST_PKTS];
     counters->ifInBroadcastPkts = port_counters[STAT_IDX_IF_IN_BROADCAST_PKTS];
     counters->ifInDiscards = -1;
     counters->ifInErrors = port_counters[STAT_IDX_IF_IN_ERRORS];
     counters->ifInUnknownProtos = -1;
     counters->ifOutOctets = port_counters[STAT_IDX_IF_OUT_OCTETS];
-    counters->ifOutUcastPkts = port_counters[SAI_PORT_STAT_IF_OUT_PKTS];
+    counters->ifOutUcastPkts = port_counters[STAT_IDX_IF_OUT_PKTS];
     counters->ifOutMulticastPkts = port_counters[STAT_IDX_IF_OUT_MULTICAST_PKTS];
     counters->ifOutBroadcastPkts = port_counters[STAT_IDX_IF_OUT_BROADCAST_PKTS];
     counters->ifOutDiscards = -1;
